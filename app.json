@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "GamePay",
+    "slug": "GamePay",
+    "version": "1.0.0",
+    "scheme": "gamepay",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFA800"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.gamepay.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "GamePay butuh akses kamera untuk scan QR code group order dan QRIS pembayaran.",
+        "NSPhotoLibraryUsageDescription": "GamePay butuh akses galeri untuk mengubah foto profil kamu.",
+        "LSApplicationQueriesSchemes": [
+          "gojek",
+          "ovo",
+          "dana",
+          "shopeeid",
+          "linkaja"
+        ]
+      }
+    },
+    "android": {
+      "package": "com.gamepay.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FFA800"
+      },
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "GamePay butuh akses galeri untuk mengubah foto profil kamu."
+        }
+      ]
+    ]
+  }
+}
