@@ -22,7 +22,7 @@
     "date-fns": "^4.1.0",
     "expo": "~53.0.10",
     "expo-auth-session": "^6.2.1",
-    "expo-clipboard": "~7.1.4",
+    "expo-clipboard": "~7.1.5",
     "expo-file-system": "~18.1.11",
     "expo-image-picker": "~16.1.4",
     "expo-linking": "~7.1.5",

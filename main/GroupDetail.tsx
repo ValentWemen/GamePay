@@ -11,7 +11,6 @@ import {
   TextInput,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
-import * as Linking from "expo-linking";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../user/Supabase";
 import {
@@ -19,11 +18,20 @@ import {
   formatDuration,
   generateGroupCode,
   getGroupDiscountPercent,
-  calculateTax,
-  SERVICE_FEE,
+  calculatePriceBreakdown,
 } from "../utils/helpers";
 
 const PRIMARY = "#FFA800";
+const SERVERS = ["Asia", "Europe", "Americas", "SEA"];
+
+interface PackageData {
+  id: string;
+  package_name: string;
+  amount: number;
+  bonus: number;
+  price: number;
+  is_popular: boolean;
+}
 
 export default function GroupDetail({
   navigation,
@@ -36,7 +44,8 @@ export default function GroupDetail({
   const params = route?.params || {};
   const isCreating = params.mode === "create";
 
-  const { game, gameEmoji, package: pkg, userId, server } = params;
+  const { game, gameEmoji, gameId, package: pkg, userId, server } = params;
+  const quantity: number = params.quantity || 1;
   const { groupId, groupCode: deepLinkCode } = params;
 
   const [loading, setLoading] = useState(!isCreating);
@@ -46,10 +55,14 @@ export default function GroupDetail({
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [targetMembers, setTargetMembers] = useState(3);
 
-  // Form join member
-  const [joinGame, setJoinGame] = useState("");
-  const [joinPackageName, setJoinPackageName] = useState("");
-  const [joinPackagePrice, setJoinPackagePrice] = useState("");
+  // Packages untuk join form
+  const [packages, setPackages] = useState<PackageData[]>([]);
+  const [loadingPackages, setLoadingPackages] = useState(false);
+  const [gameHasServer, setGameHasServer] = useState(false);
+
+  // Join form state
+  const [joinPackageId, setJoinPackageId] = useState<string | null>(null);
+  const [joinQuantity, setJoinQuantity] = useState(1);
   const [joinUserId, setJoinUserId] = useState("");
   const [joinServer, setJoinServer] = useState("");
   const [showJoinForm, setShowJoinForm] = useState(false);
@@ -79,15 +92,20 @@ export default function GroupDetail({
 
   const loadGroup = async () => {
     try {
-      const query = supabase.from("groups").select("*");
+      const query = supabase
+        .from("groups")
+        .select("*, games(has_server, currency)");
+
       const { data: group, error: gErr } = await (groupId
         ? query.eq("id", groupId).single()
         : query.eq("code", deepLinkCode).single());
 
       if (gErr || !group) {
-        Alert.alert("Group Tidak Ditemukan",
+        Alert.alert(
+          "Group Tidak Ditemukan",
           "Group ini sudah tidak tersedia atau sudah expired.",
-          [{ text: "OK", onPress: () => navigation.goBack() }]);
+          [{ text: "OK", onPress: () => navigation.goBack() }]
+        );
         return;
       }
 
@@ -97,6 +115,11 @@ export default function GroupDetail({
 
       setGroupData(group);
       setMembers(memberData || []);
+      setGameHasServer(group.games?.has_server ?? false);
+
+      if (group.game_id) {
+        fetchPackages(group.game_id);
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -104,45 +127,54 @@ export default function GroupDetail({
     }
   };
 
-  // ============================================================
-  // KALKULASI GROUP ORDER: setiap member punya order sendiri,
-  // total gabungan dapat diskon, lalu dibagi proporsional
-  // ============================================================
+  const fetchPackages = async (gId: string) => {
+    setLoadingPackages(true);
+    try {
+      const { data } = await supabase
+        .from("topup_packages")
+        .select("id, package_name, amount, bonus, price, is_popular")
+        .eq("game_id", gId)
+        .order("price", { ascending: true });
+      setPackages(data || []);
+    } catch (e) {
+      console.error("fetchPackages error:", e);
+    } finally {
+      setLoadingPackages(false);
+    }
+  };
+
+  // Breakdown per-member menggunakan formula baru (per-orang, dengan cap)
   const groupBreakdown = useMemo(() => {
     if (!groupData || members.length === 0) return null;
-    const confirmed = members.filter((m) => m.package_price > 0);
+    const confirmed = members.filter(
+      (m) => (m.unit_price || m.package_price) > 0
+    );
     if (confirmed.length === 0) return null;
 
-    const subtotal = confirmed.reduce((sum: number, m: any) => sum + (m.package_price || 0), 0);
-    const discountPct = getGroupDiscountPercent(groupData.target_members);
-    const totalDiscount = Math.round((subtotal * discountPct) / 100);
-    const afterDiscount = subtotal - totalDiscount;
-    const tax = calculateTax(afterDiscount);
-    const serviceFee = SERVICE_FEE * confirmed.length;
-    const grandTotal = afterDiscount + tax + serviceFee;
-
     const memberBreakdowns = confirmed.map((m: any) => {
-      const proportion = subtotal > 0 ? m.package_price / subtotal : 0;
-      const memberDiscount = Math.round(totalDiscount * proportion);
-      const memberTax = Math.round(tax * proportion);
-      const memberFinal = m.package_price - memberDiscount + memberTax + SERVICE_FEE;
-      return { ...m, memberDiscount, memberTax, memberFinal };
+      const unitPrice = m.unit_price || m.package_price;
+      const qty = m.quantity || 1;
+      const bd = calculatePriceBreakdown(unitPrice, groupData.target_members, qty);
+      return {
+        ...m,
+        breakdown: bd,
+        memberDiscount: bd.groupDiscount,
+        memberFinal: bd.total,
+      };
     });
 
-    return { subtotal, discountPct, totalDiscount, afterDiscount, tax, serviceFee, grandTotal, memberBreakdowns };
+    const grandTotal = memberBreakdowns.reduce((s, m) => s + m.memberFinal, 0);
+    const totalDiscount = memberBreakdowns.reduce((s, m) => s + m.memberDiscount, 0);
+    const discountPct = getGroupDiscountPercent(groupData.target_members);
+
+    return { discountPct, memberBreakdowns, grandTotal, totalDiscount };
   }, [groupData, members]);
 
+  // Breakdown host (create mode) — pakai formula baru
   const createBreakdown = useMemo(() => {
     if (!isCreating || !pkg) return null;
-    const discountPct = getGroupDiscountPercent(targetMembers);
-    const estSubtotal = pkg.price * targetMembers;
-    const totalDiscount = Math.round((estSubtotal * discountPct) / 100);
-    const afterDiscount = estSubtotal - totalDiscount;
-    const tax = calculateTax(afterDiscount);
-    const serviceFee = SERVICE_FEE * targetMembers;
-    const grandTotal = afterDiscount + tax + serviceFee;
-    return { discountPct, estSubtotal, totalDiscount, tax, serviceFee, grandTotal, estPerPerson: Math.ceil(grandTotal / targetMembers) };
-  }, [isCreating, pkg, targetMembers]);
+    return calculatePriceBreakdown(pkg.price, targetMembers, quantity);
+  }, [isCreating, pkg, targetMembers, quantity]);
 
   const handleCreateGroup = async () => {
     if (!currentUser) { Alert.alert("Belum Login", "Silakan login dulu."); return; }
@@ -155,12 +187,14 @@ export default function GroupDetail({
         code,
         host_id: currentUser.id,
         host_name: currentUser.name,
+        game_id: gameId || null,
         game_name: game,
         game_emoji: gameEmoji,
         package_name: `${pkg.amount} ${pkg.label || "Diamonds"}`,
         package_amount: pkg.amount,
         package_bonus: pkg.bonus || 0,
-        package_price: pkg.price,
+        package_price: pkg.price * quantity,
+        topup_package_id: pkg.id || null,
         target_user_id: userId,
         target_server: server || null,
         target_members: targetMembers,
@@ -175,7 +209,6 @@ export default function GroupDetail({
         return;
       }
 
-      // Tambah host sebagai member pertama beserta order mereka
       await supabase.from("group_members").insert({
         group_id: newGroup.id,
         user_id: currentUser.id,
@@ -184,8 +217,11 @@ export default function GroupDetail({
         payment_status: "pending",
         game_name: game,
         game_emoji: gameEmoji,
+        topup_package_id: pkg.id || null,
         package_name: `${pkg.amount} ${pkg.label || "Diamonds"}`,
-        package_price: pkg.price,
+        unit_price: pkg.price,
+        quantity: quantity,
+        package_price: pkg.price * quantity,
         target_user_id: userId,
         target_server: server || null,
       });
@@ -200,11 +236,11 @@ export default function GroupDetail({
 
   const handleJoinWithOrder = async () => {
     if (!currentUser || !groupData) return;
-    if (!joinGame.trim()) { Alert.alert("Lengkapi Data", "Nama game tidak boleh kosong."); return; }
-    if (!joinPackageName.trim()) { Alert.alert("Lengkapi Data", "Nama paket tidak boleh kosong."); return; }
-    const price = parseInt(joinPackagePrice.replace(/\D/g, ""));
-    if (!price || price < 1000) { Alert.alert("Lengkapi Data", "Harga paket minimal Rp 1.000."); return; }
+
+    const selectedPkg = packages.find((p) => p.id === joinPackageId);
+    if (!selectedPkg) { Alert.alert("Lengkapi Data", "Pilih paket terlebih dahulu."); return; }
     if (!joinUserId.trim()) { Alert.alert("Lengkapi Data", "ID game tidak boleh kosong."); return; }
+    if (gameHasServer && !joinServer) { Alert.alert("Lengkapi Data", "Pilih server terlebih dahulu."); return; }
 
     const alreadyMember = members.find((m) => m.user_id === currentUser.id);
     if (alreadyMember) { goToPayMember(alreadyMember); return; }
@@ -221,12 +257,15 @@ export default function GroupDetail({
         user_name: currentUser.name,
         is_host: false,
         payment_status: "pending",
-        game_name: joinGame.trim(),
-        game_emoji: "🎮",
-        package_name: joinPackageName.trim(),
-        package_price: price,
+        game_name: groupData.game_name,
+        game_emoji: groupData.game_emoji,
+        topup_package_id: selectedPkg.id,
+        package_name: selectedPkg.package_name,
+        unit_price: selectedPkg.price,
+        quantity: joinQuantity,
+        package_price: selectedPkg.price * joinQuantity,
         target_user_id: joinUserId.trim(),
-        target_server: joinServer.trim() || null,
+        target_server: joinServer || null,
       });
 
       await supabase.from("groups")
@@ -235,8 +274,7 @@ export default function GroupDetail({
 
       await loadGroup();
       setShowJoinForm(false);
-      Alert.alert("Berhasil Join! 🎉",
-        "Ordermu sudah dicatat. Bayar setelah semua peserta siap.");
+      Alert.alert("Berhasil Join! 🎉", "Ordermu sudah dicatat. Bayar setelah semua peserta siap.");
     } catch (e) {
       console.error(e);
       Alert.alert("Gagal Join Group", "Coba lagi.");
@@ -247,21 +285,26 @@ export default function GroupDetail({
 
   const goToPayMember = (member: any) => {
     if (!groupData) return;
-    const myBreakdown = groupBreakdown?.memberBreakdowns.find((mb: any) => mb.user_id === member.user_id);
+    const myBreakdown = groupBreakdown?.memberBreakdowns.find(
+      (mb: any) => mb.user_id === member.user_id
+    );
     navigation.navigate("Payment", {
-      game: member.game_name,
-      gameEmoji: member.game_emoji,
+      gameId: groupData.game_id,
+      game: member.game_name || groupData.game_name,
+      gameEmoji: member.game_emoji || groupData.game_emoji,
+      topupPackageId: member.topup_package_id,
       package: {
-        amount: member.package_name,
-        price: myBreakdown?.memberFinal || member.package_price,
+        id: member.topup_package_id,
+        price: member.unit_price || member.package_price,
+        name: member.package_name,
         label: "",
       },
+      quantity: member.quantity || 1,
       userId: member.target_user_id,
       server: member.target_server,
       members: groupData.target_members,
       groupCode: groupData.code,
       isJoiningGroup: true,
-      groupBreakdown: myBreakdown,
     });
   };
 
@@ -272,9 +315,9 @@ export default function GroupDetail({
     const msg =
       `🎮 Yuk join *Group Order GamePay*!\n\n` +
       `💰 Diskon *${discountPct}%* untuk ${groupData.target_members} orang!\n` +
-      `Masing-masing order game & paket sendiri — tapi bayar lebih murah bareng.\n\n` +
+      `Masing-masing pilih paket sendiri — tapi bayar lebih murah bareng.\n\n` +
       `✅ Cara join:\n1. Buka GamePay → tab Group → "Pakai Kode"\n` +
-      `2. Masukkan kode: *${groupData.code}*\n3. Isi order game kamu\n4. Bayar bagianmu!\n\n` +
+      `2. Masukkan kode: *${groupData.code}*\n3. Pilih paket game kamu\n4. Bayar bagianmu!\n\n` +
       `Atau klik: ${universalUrl}`;
     try { await Share.share({ message: msg, url: universalUrl }); } catch {}
   };
@@ -296,7 +339,9 @@ export default function GroupDetail({
   // ============ CREATE MODE ============
   if (isCreating) {
     if (!pkg) return (
-      <View style={[styles.container, styles.center]}><Text>Data paket tidak valid.</Text></View>
+      <View style={[styles.container, styles.center]}>
+        <Text>Data paket tidak valid.</Text>
+      </View>
     );
 
     return (
@@ -319,28 +364,39 @@ export default function GroupDetail({
                 <Text style={styles.orderPkg}>
                   {pkg.amount} {pkg.label || "Diamonds"}
                   {pkg.bonus ? ` + ${pkg.bonus} Bonus` : ""}
+                  {quantity > 1 ? ` × ${quantity}` : ""}
                 </Text>
-                <Text style={styles.orderMeta}>ID: {userId}{server ? ` • ${server}` : ""}</Text>
+                <Text style={styles.orderMeta}>
+                  ID: {userId}{server ? ` • ${server}` : ""}
+                </Text>
               </View>
-              <Text style={styles.orderPrice}>{formatRupiah(pkg.price)}</Text>
+              <Text style={styles.orderPrice}>
+                {formatRupiah(pkg.price * quantity)}
+              </Text>
             </View>
           </View>
 
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Berapa Orang yang Akan Ikut?</Text>
             <Text style={styles.cardSub}>
-              Setiap teman mengisi order mereka sendiri. Diskon dibagi proporsional dari total bersama.
+              Semakin banyak orang, semakin besar diskon per orang.
             </Text>
             <View style={styles.memberPicker}>
               {[2, 3, 4, 5].map((n) => {
                 const isActive = targetMembers === n;
                 const disc = getGroupDiscountPercent(n);
+                const cap = n * 5000;
                 return (
                   <TouchableOpacity key={n}
                     style={[styles.memberBtn, isActive && styles.memberBtnActive]}
                     onPress={() => setTargetMembers(n)}>
                     <Text style={[styles.memberBtnNum, isActive && styles.memberBtnNumActive]}>{n}</Text>
-                    <Text style={[styles.memberBtnSub, isActive && styles.memberBtnSubActive]}>-{disc}%</Text>
+                    <Text style={[styles.memberBtnSub, isActive && styles.memberBtnSubActive]}>
+                      -{disc}%
+                    </Text>
+                    <Text style={[styles.memberBtnCap, isActive && styles.memberBtnSubActive]}>
+                      maks {formatRupiah(cap)}
+                    </Text>
                   </TouchableOpacity>
                 );
               })}
@@ -349,28 +405,33 @@ export default function GroupDetail({
 
           {createBreakdown && (
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>💡 Estimasi Bagian Kamu</Text>
-              <Text style={styles.cardSub}>Asumsi semua paket sama harga. Angka final sesuai paket tiap member.</Text>
+              <Text style={styles.cardTitle}>💡 Rincian Bayar Kamu</Text>
               <View style={styles.row}>
-                <Text style={styles.rowLabel}>Harga paketmu</Text>
-                <Text style={styles.rowVal}>{formatRupiah(pkg.price)}</Text>
+                <Text style={styles.rowLabel}>
+                  Subtotal ({quantity}× {formatRupiah(pkg.price)})
+                </Text>
+                <Text style={styles.rowVal}>{formatRupiah(createBreakdown.subtotal)}</Text>
               </View>
               <View style={styles.row}>
-                <Text style={[styles.rowLabel, { color: "#22c55e" }]}>Diskon group ({createBreakdown.discountPct}%)</Text>
+                <Text style={[styles.rowLabel, { color: "#22c55e" }]}>
+                  Diskon group ({createBreakdown.groupDiscountPercent}%)
+                </Text>
                 <Text style={[styles.rowVal, { color: "#22c55e" }]}>
-                  -est. {formatRupiah(Math.round(createBreakdown.totalDiscount / targetMembers))}
+                  -{formatRupiah(createBreakdown.groupDiscount)}
                 </Text>
               </View>
               <View style={styles.row}>
-                <Text style={styles.rowLabel}>PPN 11% + Service Fee</Text>
-                <Text style={styles.rowVal}>
-                  +est. {formatRupiah(Math.round((createBreakdown.tax + createBreakdown.serviceFee) / targetMembers))}
-                </Text>
+                <Text style={styles.rowLabel}>PPN 11%</Text>
+                <Text style={styles.rowVal}>{formatRupiah(createBreakdown.tax)}</Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.rowLabel}>Biaya Layanan</Text>
+                <Text style={styles.rowVal}>{formatRupiah(createBreakdown.serviceFee)}</Text>
               </View>
               <View style={styles.divider} />
               <View style={styles.row}>
-                <Text style={styles.totalLabel}>Estimasi bayar kamu</Text>
-                <Text style={styles.totalVal}>≈ {formatRupiah(createBreakdown.estPerPerson)}</Text>
+                <Text style={styles.totalLabel}>Total Bayar Kamu</Text>
+                <Text style={styles.totalVal}>{formatRupiah(createBreakdown.total)}</Text>
               </View>
             </View>
           )}
@@ -379,12 +440,11 @@ export default function GroupDetail({
             <Text style={styles.infoBannerTitle}>ℹ️ Cara Kerja Group Order</Text>
             <Text style={styles.infoBannerText}>
               {"1. Kamu buat group dan bagikan kode ke teman\n"}
-              {"2. Setiap teman join dan isi "}
-              <Text style={{ fontWeight: "700" }}>order mereka sendiri</Text>
-              {" (bisa beda game, beda paket)\n"}
-              {"3. Total semua order digabung → dapat diskon bersama\n"}
-              {"4. Masing-masing bayar bagian mereka (lebih murah!)\n"}
-              {"5. Semua top up diproses setelah semua lunas"}
+              {"2. Setiap teman join, pilih paket dari "}
+              <Text style={{ fontWeight: "700" }}>game yang sama</Text>
+              {" (boleh beda paket & jumlah)\n"}
+              {"3. Diskon dihitung per orang dari harga paket masing-masing\n"}
+              {"4. Masing-masing bayar bagian mereka sendiri"}
             </Text>
           </View>
         </ScrollView>
@@ -411,6 +471,7 @@ export default function GroupDetail({
     Math.floor((new Date(groupData.expires_at).getTime() - Date.now()) / 60000));
   const progress = (groupData.current_members / groupData.target_members) * 100;
   const discountPct = getGroupDiscountPercent(groupData.target_members);
+  const selectedJoinPkg = packages.find((p) => p.id === joinPackageId);
 
   return (
     <View style={styles.container}>
@@ -428,7 +489,9 @@ export default function GroupDetail({
         <View style={styles.infoCard}>
           <View style={styles.infoRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.infoTitle}>Group Order</Text>
+              <Text style={styles.infoTitle}>
+                {groupData.game_emoji} {groupData.game_name}
+              </Text>
               <Text style={styles.infoSub}>Dibuat oleh {groupData.host_name}</Text>
             </View>
             <View style={styles.timerBadge}>
@@ -442,7 +505,7 @@ export default function GroupDetail({
               {` untuk ${groupData.target_members} orang!`}
             </Text>
             <Text style={styles.discountHighlightSub}>
-              Setiap member order paket sendiri, diskon dibagi bersama
+              Maks Rp {(groupData.target_members * 5000).toLocaleString("id-ID")} per orang
             </Text>
           </View>
         </View>
@@ -463,7 +526,9 @@ export default function GroupDetail({
         {/* Daftar peserta */}
         <View style={styles.card}>
           <View style={styles.row}>
-            <Text style={styles.cardTitle}>Peserta & Order Mereka ({groupData.current_members}/{groupData.target_members})</Text>
+            <Text style={styles.cardTitle}>
+              Peserta ({groupData.current_members}/{groupData.target_members})
+            </Text>
             <Text style={styles.progressPct}>{progress.toFixed(0)}%</Text>
           </View>
           <View style={styles.progressBarBg}>
@@ -475,11 +540,14 @@ export default function GroupDetail({
               <View style={styles.memberHeader}>
                 <View style={styles.memberLeft}>
                   <View style={styles.memberAvatar}>
-                    <Text style={{ fontSize: 16 }}>{m.user_name?.charAt(0).toUpperCase() || "?"}</Text>
+                    <Text style={{ fontSize: 16 }}>
+                      {m.user_name?.charAt(0).toUpperCase() || "?"}
+                    </Text>
                   </View>
                   <View>
                     <Text style={styles.memberName}>
-                      {m.user_name}{m.is_host ? " 👑" : ""}{m.user_id === currentUser?.id ? " (kamu)" : ""}
+                      {m.user_name}{m.is_host ? " 👑" : ""}
+                      {m.user_id === currentUser?.id ? " (kamu)" : ""}
                     </Text>
                   </View>
                 </View>
@@ -492,15 +560,21 @@ export default function GroupDetail({
                 </View>
               </View>
 
-              {m.package_price > 0 && (
+              {(m.unit_price || m.package_price) > 0 && (
                 <View style={styles.memberOrderBox}>
                   <Text style={styles.memberOrderEmoji}>{m.game_emoji || "🎮"}</Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.memberOrderGame}>{m.game_name}</Text>
-                    <Text style={styles.memberOrderPkg}>{m.package_name}</Text>
-                    <Text style={styles.memberOrderMeta}>ID: {m.target_user_id}{m.target_server ? ` • ${m.target_server}` : ""}</Text>
+                    <Text style={styles.memberOrderPkg}>
+                      {m.package_name}
+                      {(m.quantity || 1) > 1 ? ` × ${m.quantity}` : ""}
+                    </Text>
+                    <Text style={styles.memberOrderMeta}>
+                      ID: {m.target_user_id}{m.target_server ? ` • ${m.target_server}` : ""}
+                    </Text>
                   </View>
-                  <Text style={styles.memberOrderPrice}>{formatRupiah(m.package_price)}</Text>
+                  <Text style={styles.memberOrderPrice}>
+                    {formatRupiah(m.package_price || (m.unit_price * (m.quantity || 1)))}
+                  </Text>
                 </View>
               )}
             </View>
@@ -518,91 +592,161 @@ export default function GroupDetail({
           ))}
         </View>
 
-        {/* Rincian harga gabungan */}
+        {/* Rincian per-member */}
         {groupBreakdown && (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>💰 Rincian Harga Bersama</Text>
-            <View style={styles.row}>
-              <Text style={styles.rowLabel}>
-                Total semua order ({groupBreakdown.memberBreakdowns.length} org)
-              </Text>
-              <Text style={styles.rowVal}>{formatRupiah(groupBreakdown.subtotal)}</Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={[styles.rowLabel, { color: "#22c55e" }]}>
-                Diskon group ({groupBreakdown.discountPct}%)
-              </Text>
-              <Text style={[styles.rowVal, { color: "#22c55e" }]}>
-                -{formatRupiah(groupBreakdown.totalDiscount)}
-              </Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.rowLabel}>PPN 11%</Text>
-              <Text style={styles.rowVal}>{formatRupiah(groupBreakdown.tax)}</Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.rowLabel}>Biaya Layanan</Text>
-              <Text style={styles.rowVal}>{formatRupiah(groupBreakdown.serviceFee)}</Text>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.row}>
-              <Text style={styles.totalLabel}>Total Semua</Text>
-              <Text style={styles.totalVal}>{formatRupiah(groupBreakdown.grandTotal)}</Text>
-            </View>
-
-            <View style={styles.memberBreakdownHeader}>
-              <Text style={styles.cardTitle}>Bagian Masing-Masing</Text>
-            </View>
+            <Text style={styles.cardTitle}>💰 Bagian Bayar Masing-Masing</Text>
+            <Text style={styles.cardSub}>
+              Diskon dihitung per orang dari harga paket masing-masing.
+            </Text>
             {groupBreakdown.memberBreakdowns.map((mb: any, i: number) => (
               <View key={i} style={styles.memberBreakdownRow}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.memberBreakdownName}>{mb.user_name}</Text>
-                  <Text style={styles.memberBreakdownPkg}>{mb.package_name} • {formatRupiah(mb.package_price)}</Text>
+                  <Text style={styles.memberBreakdownName}>
+                    {mb.user_name}{mb.is_host ? " 👑" : ""}
+                  </Text>
+                  <Text style={styles.memberBreakdownPkg}>
+                    {mb.package_name}
+                    {(mb.quantity || 1) > 1 ? ` × ${mb.quantity}` : ""}
+                    {" — "}{formatRupiah(mb.unit_price || mb.package_price)}/pkt
+                  </Text>
                 </View>
                 <View style={{ alignItems: "flex-end" }}>
                   <Text style={[styles.memberBreakdownFinal,
                     mb.user_id === currentUser?.id && { color: PRIMARY }]}>
                     {formatRupiah(mb.memberFinal)}
                   </Text>
-                  <Text style={{ fontSize: 10, color: "#22c55e" }}>hemat {formatRupiah(mb.memberDiscount)}</Text>
+                  <Text style={{ fontSize: 10, color: "#22c55e" }}>
+                    hemat {formatRupiah(mb.memberDiscount)}
+                  </Text>
                 </View>
               </View>
             ))}
+            <View style={styles.divider} />
+            <View style={styles.row}>
+              <Text style={styles.totalLabel}>Total Semua Orang</Text>
+              <Text style={styles.totalVal}>{formatRupiah(groupBreakdown.grandTotal)}</Text>
+            </View>
           </View>
         )}
 
-        {/* Form join untuk member baru */}
-        {!myMembership && !isHost && showJoinForm && (
+        {/* Form join — package picker */}
+        {!myMembership && showJoinForm && (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>🎮 Isi Order Kamu</Text>
-            <Text style={styles.cardSub}>Boleh beda game dan paket dari member lain.</Text>
+            <Text style={styles.cardTitle}>🎮 Pilih Paket Kamu</Text>
 
-            <Text style={styles.formLabel}>Nama Game</Text>
-            <TextInput style={styles.formInput} placeholder="cth: Mobile Legends"
-              placeholderTextColor="#bbb" value={joinGame} onChangeText={setJoinGame} />
+            {/* Game locked indicator */}
+            <View style={styles.gameLockRow}>
+              <Text style={{ fontSize: 20 }}>{groupData.game_emoji}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.gameLockName}>{groupData.game_name}</Text>
+                <Text style={styles.gameLockSub}>Game ditentukan oleh host</Text>
+              </View>
+              <View style={styles.gameLockBadge}>
+                <Text style={styles.gameLockBadgeText}>🔒</Text>
+              </View>
+            </View>
 
-            <Text style={styles.formLabel}>Nama Paket</Text>
-            <TextInput style={styles.formInput} placeholder="cth: 286 Diamonds"
-              placeholderTextColor="#bbb" value={joinPackageName} onChangeText={setJoinPackageName} />
+            {loadingPackages ? (
+              <ActivityIndicator color={PRIMARY} style={{ marginVertical: 20 }} />
+            ) : packages.length === 0 ? (
+              <Text style={styles.cardSub}>
+                Paket tidak tersedia. Hubungi admin.
+              </Text>
+            ) : (
+              <>
+                <Text style={[styles.cardTitle, { marginTop: 12 }]}>Pilih Paket</Text>
+                <View style={styles.pkgGrid}>
+                  {packages.map((pkg) => (
+                    <TouchableOpacity
+                      key={pkg.id}
+                      style={[styles.pkgCard, joinPackageId === pkg.id && styles.pkgCardActive]}
+                      onPress={() => { setJoinPackageId(pkg.id); setJoinQuantity(1); }}
+                    >
+                      {pkg.is_popular && (
+                        <View style={styles.popularBadge}>
+                          <Text style={styles.popularText}>🔥 Popular</Text>
+                        </View>
+                      )}
+                      <Text style={styles.pkgAmount}>{pkg.amount}</Text>
+                      <Text style={styles.pkgSub}>{groupData.games?.currency || "Diamonds"}</Text>
+                      {pkg.bonus > 0 && (
+                        <Text style={styles.pkgBonus}>+{pkg.bonus} Bonus</Text>
+                      )}
+                      <Text style={styles.pkgPrice}>{formatRupiah(pkg.price)}</Text>
+                      {joinPackageId === pkg.id && (
+                        <Text style={styles.pkgCheck}>✓</Text>
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
 
-            <Text style={styles.formLabel}>Harga Paket (Rp)</Text>
-            <TextInput style={styles.formInput} placeholder="cth: 80000"
-              placeholderTextColor="#bbb" value={joinPackagePrice}
-              onChangeText={(t) => setJoinPackagePrice(t.replace(/\D/g, ""))}
-              keyboardType="numeric" />
+                {selectedJoinPkg && (
+                  <View style={{ marginTop: 12 }}>
+                    <Text style={styles.cardTitle}>Jumlah Paket</Text>
+                    <View style={styles.qtyRow}>
+                      <TouchableOpacity
+                        style={[styles.qtyBtn, joinQuantity <= 1 && styles.qtyBtnDisabled]}
+                        onPress={() => setJoinQuantity(Math.max(1, joinQuantity - 1))}
+                        disabled={joinQuantity <= 1}
+                      >
+                        <Text style={styles.qtyBtnText}>−</Text>
+                      </TouchableOpacity>
+                      <View style={styles.qtyDisplay}>
+                        <Text style={styles.qtyValue}>{joinQuantity}</Text>
+                        <Text style={styles.qtyLabel}>paket</Text>
+                      </View>
+                      <TouchableOpacity
+                        style={[styles.qtyBtn, joinQuantity >= 10 && styles.qtyBtnDisabled]}
+                        onPress={() => setJoinQuantity(Math.min(10, joinQuantity + 1))}
+                        disabled={joinQuantity >= 10}
+                      >
+                        <Text style={styles.qtyBtnText}>+</Text>
+                      </TouchableOpacity>
+                    </View>
+                    {joinQuantity > 1 && (
+                      <Text style={styles.qtyTotal}>
+                        Subtotal: {formatRupiah(selectedJoinPkg.price * joinQuantity)}
+                      </Text>
+                    )}
+                  </View>
+                )}
+              </>
+            )}
 
-            <Text style={styles.formLabel}>ID Game Kamu</Text>
-            <TextInput style={styles.formInput} placeholder="User ID / Player ID"
-              placeholderTextColor="#bbb" value={joinUserId} onChangeText={setJoinUserId} />
+            <Text style={[styles.formLabel, { marginTop: 16 }]}>ID Game Kamu</Text>
+            <TextInput
+              style={styles.formInput}
+              placeholder="User ID / Player ID"
+              placeholderTextColor="#bbb"
+              value={joinUserId}
+              onChangeText={setJoinUserId}
+              keyboardType="numeric"
+            />
 
-            <Text style={styles.formLabel}>Server (opsional)</Text>
-            <TextInput style={styles.formInput} placeholder="cth: ID (1234)"
-              placeholderTextColor="#bbb" value={joinServer} onChangeText={setJoinServer} />
+            {gameHasServer && (
+              <>
+                <Text style={styles.formLabel}>Pilih Server</Text>
+                <View style={styles.serverGrid}>
+                  {SERVERS.map((s) => (
+                    <TouchableOpacity
+                      key={s}
+                      style={[styles.serverBtn, joinServer === s && styles.serverBtnActive]}
+                      onPress={() => setJoinServer(s)}
+                    >
+                      <Text style={[styles.serverBtnText, joinServer === s && styles.serverBtnActiveText]}>
+                        {s}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            )}
 
-            <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 16 }}>
               <TouchableOpacity
-                style={[styles.cancelBtn]}
-                onPress={() => setShowJoinForm(false)}>
+                style={styles.cancelBtn}
+                onPress={() => { setShowJoinForm(false); setJoinPackageId(null); }}>
                 <Text style={styles.cancelBtnText}>Batal</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -630,18 +774,17 @@ export default function GroupDetail({
             <Text style={styles.payBtnText}>
               {groupBreakdown
                 ? `Bayar ${formatRupiah(
-                    groupBreakdown.memberBreakdowns.find((mb: any) => mb.user_id === currentUser?.id)?.memberFinal || 0)}`
+                    groupBreakdown.memberBreakdowns.find(
+                      (mb: any) => mb.user_id === currentUser?.id
+                    )?.memberFinal || 0
+                  )}`
                 : "Bayar Sekarang"}
             </Text>
           </TouchableOpacity>
-        ) : !isHost && !showJoinForm ? (
+        ) : !showJoinForm ? (
           <TouchableOpacity style={styles.payBtn} onPress={() => setShowJoinForm(true)}>
-            <Text style={styles.payBtnText}>🙋 Ikut Group & Isi Orderku</Text>
+            <Text style={styles.payBtnText}>🙋 Ikut Group & Pilih Paketku</Text>
           </TouchableOpacity>
-        ) : isHost ? (
-          <View style={[styles.payBtn, { backgroundColor: "#f0f0f0" }]}>
-            <Text style={[styles.payBtnText, { color: "#888" }]}>Tunggu Semua Peserta Join</Text>
-          </View>
         ) : null}
       </View>
     </View>
@@ -666,13 +809,13 @@ const styles = StyleSheet.create({
 
   infoCard: { backgroundColor: "#fff", borderRadius: 14, padding: 16, marginBottom: 12 },
   infoRow: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
-  infoTitle: { fontSize: 18, fontWeight: "800", color: "#1a1a1a" },
+  infoTitle: { fontSize: 16, fontWeight: "800", color: "#1a1a1a" },
   infoSub: { fontSize: 12, color: "#888", marginTop: 2 },
   timerBadge: { backgroundColor: "#FFFBEA", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
   timerText: { fontSize: 12, fontWeight: "700", color: PRIMARY },
   discountHighlight: { backgroundColor: "#e6f9ee", borderRadius: 10, padding: 12 },
   discountHighlightText: { fontSize: 16, fontWeight: "700", color: "#22c55e", textAlign: "center" },
-  discountHighlightSub: { fontSize: 12, color: "#22c55e", textAlign: "center", marginTop: 4 },
+  discountHighlightSub: { fontSize: 11, color: "#22c55e", textAlign: "center", marginTop: 4 },
 
   codeCard: { backgroundColor: "#1a1a2e", borderRadius: 14, padding: 16, marginBottom: 12 },
   codeLabel: { fontSize: 12, color: "#aaa", marginBottom: 6 },
@@ -698,7 +841,7 @@ const styles = StyleSheet.create({
 
   memberPicker: { flexDirection: "row", gap: 8 },
   memberBtn: {
-    flex: 1, backgroundColor: "#F5F5F5", borderRadius: 12, padding: 14,
+    flex: 1, backgroundColor: "#F5F5F5", borderRadius: 12, padding: 10,
     alignItems: "center", borderWidth: 2, borderColor: "transparent",
   },
   memberBtnActive: { borderColor: PRIMARY, backgroundColor: "#FFFBEA" },
@@ -706,6 +849,7 @@ const styles = StyleSheet.create({
   memberBtnNumActive: { color: PRIMARY },
   memberBtnSub: { fontSize: 11, color: "#888", marginTop: 2 },
   memberBtnSubActive: { color: PRIMARY, fontWeight: "700" },
+  memberBtnCap: { fontSize: 9, color: "#bbb", marginTop: 2, textAlign: "center" },
 
   row: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 5, alignItems: "center" },
   rowLabel: { fontSize: 13, color: "#888" },
@@ -739,12 +883,10 @@ const styles = StyleSheet.create({
     flexDirection: "row", alignItems: "center", gap: 10,
   },
   memberOrderEmoji: { fontSize: 20 },
-  memberOrderGame: { fontSize: 12, fontWeight: "700", color: "#1a1a1a" },
-  memberOrderPkg: { fontSize: 11, color: "#666", marginTop: 1 },
+  memberOrderPkg: { fontSize: 12, fontWeight: "700", color: "#1a1a1a" },
   memberOrderMeta: { fontSize: 10, color: "#aaa", marginTop: 1 },
   memberOrderPrice: { fontSize: 13, fontWeight: "800", color: "#1a1a1a" },
 
-  memberBreakdownHeader: { marginTop: 12, marginBottom: 4 },
   memberBreakdownRow: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
     paddingVertical: 8, borderTopWidth: 1, borderTopColor: "#f5f5f5",
@@ -760,11 +902,64 @@ const styles = StyleSheet.create({
   infoBannerTitle: { fontSize: 13, fontWeight: "700", color: "#1a1a1a", marginBottom: 8 },
   infoBannerText: { fontSize: 12, color: "#666", lineHeight: 20 },
 
+  gameLockRow: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    backgroundColor: "#F5F5F5", borderRadius: 10, padding: 12, marginBottom: 12,
+  },
+  gameLockName: { fontSize: 14, fontWeight: "700", color: "#1a1a1a" },
+  gameLockSub: { fontSize: 11, color: "#888", marginTop: 2 },
+  gameLockBadge: {
+    backgroundColor: "#e5e5e5", borderRadius: 8,
+    paddingHorizontal: 8, paddingVertical: 4,
+  },
+  gameLockBadgeText: { fontSize: 14 },
+
+  pkgGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
+  pkgCard: {
+    width: "47%", backgroundColor: "#F5F5F5", borderRadius: 12,
+    padding: 12, alignItems: "center", borderWidth: 1.5,
+    borderColor: "transparent", position: "relative", minHeight: 110,
+  },
+  pkgCardActive: { borderColor: PRIMARY, backgroundColor: "#FFFBEA" },
+  popularBadge: {
+    position: "absolute", top: -8, alignSelf: "center",
+    backgroundColor: PRIMARY, borderRadius: 8,
+    paddingVertical: 2, paddingHorizontal: 6,
+  },
+  popularText: { fontSize: 10, fontWeight: "700", color: "#000" },
+  pkgAmount: { fontSize: 20, fontWeight: "800", color: "#1a1a1a", marginTop: 6 },
+  pkgSub: { fontSize: 10, color: "#888", marginTop: 1 },
+  pkgBonus: { fontSize: 10, color: PRIMARY, fontWeight: "600", marginTop: 1 },
+  pkgPrice: { fontSize: 12, color: "#555", marginTop: 4, fontWeight: "700" },
+  pkgCheck: { fontSize: 14, color: PRIMARY, fontWeight: "800", marginTop: 2 },
+
+  qtyRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 20, marginTop: 8 },
+  qtyBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: PRIMARY, alignItems: "center", justifyContent: "center",
+  },
+  qtyBtnDisabled: { backgroundColor: "#e0e0e0" },
+  qtyBtnText: { fontSize: 20, fontWeight: "700", color: "#fff" },
+  qtyDisplay: { alignItems: "center", minWidth: 50 },
+  qtyValue: { fontSize: 24, fontWeight: "800", color: "#1a1a1a" },
+  qtyLabel: { fontSize: 11, color: "#888" },
+  qtyTotal: { textAlign: "center", marginTop: 8, fontSize: 13, fontWeight: "700", color: PRIMARY },
+
   formLabel: { fontSize: 13, fontWeight: "600", color: "#555", marginBottom: 6, marginTop: 10 },
   formInput: {
     backgroundColor: "#F5F5F5", borderRadius: 10, padding: 12,
     fontSize: 14, color: "#1a1a1a", borderWidth: 1, borderColor: "#e5e5e5",
   },
+
+  serverGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 4 },
+  serverBtn: {
+    flex: 1, minWidth: "44%", backgroundColor: "#F5F5F5",
+    borderRadius: 10, padding: 12, alignItems: "center",
+    borderWidth: 1.5, borderColor: "transparent",
+  },
+  serverBtnActive: { borderColor: PRIMARY, backgroundColor: "#FFFBEA" },
+  serverBtnText: { fontSize: 13, fontWeight: "600", color: "#555" },
+  serverBtnActiveText: { color: PRIMARY },
 
   cancelBtn: {
     backgroundColor: "#F5F5F5", borderRadius: 14, height: 52,

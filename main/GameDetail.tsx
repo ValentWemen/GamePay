@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -6,35 +6,32 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
+  ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { formatRupiah, getGroupDiscountPercent } from "../utils/helpers";
+import { supabase } from "../user/Supabase";
 
 const PRIMARY = "#FFA800";
 const STEPS = ["User ID", "Paket", "Bayar"];
-
-// Paket harga dalam Rupiah - realistic Indonesia market
-// Harga per diamond ~ Rp 250-300 untuk Mobile Legends/Free Fire
-const PACKAGES = [
-  { id: "1", amount: 86, bonus: null, price: 22000 },
-  { id: "2", amount: 172, bonus: 14, price: 44000 },
-  { id: "3", amount: 257, bonus: 25, price: 65000, popular: true },
-  { id: "4", amount: 706, bonus: 70, price: 175000 },
-  { id: "5", amount: 1412, bonus: 140, price: 349000 },
-  { id: "6", amount: 2195, bonus: 250, price: 525000 },
-];
-
 const SERVERS = ["Asia", "Europe", "Americas", "SEA"];
 
-const GAMES: Record<
-  string,
-  { name: string; emoji: string; hasServer: boolean; currency: string }
-> = {
-  "1": { name: "Mobile Legends", emoji: "🗡️", hasServer: true, currency: "Diamonds" },
-  "2": { name: "Free Fire", emoji: "🔥", hasServer: false, currency: "Diamonds" },
-  "3": { name: "PUBG Mobile", emoji: "🎯", hasServer: false, currency: "UC" },
-  "4": { name: "Genshin Impact", emoji: "✨", hasServer: true, currency: "Genesis Crystals" },
-};
+interface GameData {
+  id: string;
+  title: string;
+  emoji: string;
+  currency: string;
+  has_server: boolean;
+}
+
+interface PackageData {
+  id: string;
+  package_name: string;
+  amount: number;
+  bonus: number;
+  price: number;
+  is_popular: boolean;
+}
 
 export default function GameDetail({
   navigation,
@@ -44,19 +41,59 @@ export default function GameDetail({
   route: any;
 }) {
   const insets = useSafeAreaInsets();
-  const gameId = route?.params?.gameId || "2";
-  const game = GAMES[gameId] || GAMES["2"];
+  const gameId = route?.params?.gameId;
+
+  const [game, setGame] = useState<GameData | null>(null);
+  const [packages, setPackages] = useState<PackageData[]>([]);
+  const [loadingData, setLoadingData] = useState(true);
 
   const [step, setStep] = useState(0);
   const [userId, setUserId] = useState("");
   const [server, setServer] = useState("");
   const [selectedPkg, setSelectedPkg] = useState<string | null>(null);
+  const [quantity, setQuantity] = useState(1);
   const [groupMode, setGroupMode] = useState(false);
+
+  useEffect(() => {
+    if (!gameId) { navigation.goBack(); return; }
+    fetchGameData();
+  }, [gameId]);
+
+  const fetchGameData = async () => {
+    setLoadingData(true);
+    try {
+      const [gameRes, pkgRes] = await Promise.all([
+        supabase
+          .from("games")
+          .select("id, title, emoji, currency, has_server")
+          .eq("id", gameId)
+          .single(),
+        supabase
+          .from("topup_packages")
+          .select("id, package_name, amount, bonus, price, is_popular")
+          .eq("game_id", gameId)
+          .order("price", { ascending: true }),
+      ]);
+
+      if (gameRes.error) throw gameRes.error;
+      if (pkgRes.error) throw pkgRes.error;
+
+      setGame(gameRes.data);
+      setPackages(pkgRes.data || []);
+    } catch (e) {
+      console.error("GameDetail fetch error:", e);
+      navigation.goBack();
+    } finally {
+      setLoadingData(false);
+    }
+  };
+
+  const selectedPkgData = packages.find((p) => p.id === selectedPkg);
 
   const canContinue = () => {
     if (step === 0) {
       if (userId.length < 3) return false;
-      if (game.hasServer && server === "") return false;
+      if (game?.has_server && server === "") return false;
       return true;
     }
     if (step === 1) return selectedPkg !== null;
@@ -64,37 +101,48 @@ export default function GameDetail({
   };
 
   const onContinue = () => {
-    if (step === 0) {
-      setStep(1);
-      return;
-    }
+    if (step === 0) { setStep(1); return; }
 
     if (step === 1) {
-      const pkg = PACKAGES.find((p) => p.id === selectedPkg);
-      if (!pkg) return;
+      if (!selectedPkgData || !game) return;
+
+      const params = {
+        gameId: game.id,
+        game: game.title,
+        gameEmoji: game.emoji,
+        topupPackageId: selectedPkgData.id,
+        package: {
+          id: selectedPkgData.id,
+          amount: selectedPkgData.amount,
+          bonus: selectedPkgData.bonus,
+          price: selectedPkgData.price,
+          label: game.currency,
+          name: selectedPkgData.package_name,
+        },
+        quantity,
+        userId,
+        server,
+        members: 1,
+      };
 
       if (groupMode) {
-        navigation.navigate("CreateGroup", {
-          game: game.name,
-          gameEmoji: game.emoji,
-          package: { ...pkg, label: game.currency },
-          userId,
-          server,
-          mode: "create",
-        });
+        navigation.navigate("CreateGroup", { ...params, mode: "create" });
       } else {
-        navigation.navigate("Payment", {
-          game: game.name,
-          gameEmoji: game.emoji,
-          package: { ...pkg, label: game.currency },
-          userId,
-          server,
-          members: 1,
-        });
+        navigation.navigate("Payment", params);
       }
-      return;
     }
   };
+
+  if (loadingData) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={PRIMARY} />
+        <Text style={styles.loadingText}>Memuat data...</Text>
+      </View>
+    );
+  }
+
+  if (!game) return null;
 
   return (
     <View style={styles.container}>
@@ -109,26 +157,19 @@ export default function GameDetail({
           <Text style={{ fontSize: 22 }}>{game.emoji}</Text>
         </View>
         <View>
-          <Text style={styles.headerTitle}>{game.name}</Text>
+          <Text style={styles.headerTitle}>{game.title}</Text>
           <Text style={styles.headerSub}>Top Up</Text>
         </View>
       </View>
 
       <View style={styles.stepBar}>
         {STEPS.map((s, i) => (
-          <View
-            key={s}
-            style={[styles.stepLine, i <= step && styles.stepLineActive]}
-          />
+          <View key={s} style={[styles.stepLine, i <= step && styles.stepLineActive]} />
         ))}
       </View>
-
       <View style={styles.stepLabelRow}>
         {STEPS.map((s, i) => (
-          <Text
-            key={s}
-            style={[styles.stepLabel, i === step && styles.stepLabelActive]}
-          >
+          <Text key={s} style={[styles.stepLabel, i === step && styles.stepLabelActive]}>
             {s}
           </Text>
         ))}
@@ -150,27 +191,17 @@ export default function GameDetail({
               💡 User ID bisa ditemukan di profil game kamu
             </Text>
 
-            {game.hasServer && (
+            {game.has_server && (
               <>
-                <Text style={[styles.cardTitle, { marginTop: 20 }]}>
-                  Pilih Server
-                </Text>
+                <Text style={[styles.cardTitle, { marginTop: 20 }]}>Pilih Server</Text>
                 <View style={styles.serverGrid}>
                   {SERVERS.map((s) => (
                     <TouchableOpacity
                       key={s}
-                      style={[
-                        styles.serverBtn,
-                        server === s && styles.serverBtnActive,
-                      ]}
+                      style={[styles.serverBtn, server === s && styles.serverBtnActive]}
                       onPress={() => setServer(s)}
                     >
-                      <Text
-                        style={[
-                          styles.serverBtnText,
-                          server === s && styles.serverBtnActiveText,
-                        ]}
-                      >
+                      <Text style={[styles.serverBtnText, server === s && styles.serverBtnActiveText]}>
                         {s}
                       </Text>
                     </TouchableOpacity>
@@ -183,16 +214,12 @@ export default function GameDetail({
               <View style={styles.previewBox}>
                 <Text style={styles.previewText}>
                   ✓ User ID:{" "}
-                  <Text style={{ fontWeight: "700", color: PRIMARY }}>
-                    {userId}
-                  </Text>
+                  <Text style={{ fontWeight: "700", color: PRIMARY }}>{userId}</Text>
                 </Text>
                 {server ? (
                   <Text style={styles.previewText}>
                     ✓ Server:{" "}
-                    <Text style={{ fontWeight: "700", color: PRIMARY }}>
-                      {server}
-                    </Text>
+                    <Text style={{ fontWeight: "700", color: PRIMARY }}>{server}</Text>
                   </Text>
                 ) : null}
               </View>
@@ -206,28 +233,23 @@ export default function GameDetail({
               <Text style={styles.cardTitle}>Pilih Paket</Text>
               <Text style={styles.cardSub}>
                 Untuk User ID:{" "}
-                <Text style={{ color: PRIMARY, fontWeight: "700" }}>
-                  {userId}
-                </Text>
+                <Text style={{ color: PRIMARY, fontWeight: "700" }}>{userId}</Text>
               </Text>
               <View style={styles.pkgGrid}>
-                {PACKAGES.map((pkg) => (
+                {packages.map((pkg) => (
                   <TouchableOpacity
                     key={pkg.id}
-                    style={[
-                      styles.pkgCard,
-                      selectedPkg === pkg.id && styles.pkgCardActive,
-                    ]}
-                    onPress={() => setSelectedPkg(pkg.id)}
+                    style={[styles.pkgCard, selectedPkg === pkg.id && styles.pkgCardActive]}
+                    onPress={() => { setSelectedPkg(pkg.id); setQuantity(1); }}
                   >
-                    {(pkg as any).popular && (
+                    {pkg.is_popular && (
                       <View style={styles.popularBadge}>
                         <Text style={styles.popularText}>🔥 Popular</Text>
                       </View>
                     )}
                     <Text style={styles.pkgAmount}>{pkg.amount}</Text>
                     <Text style={styles.pkgDiamond}>💎 {game.currency}</Text>
-                    {pkg.bonus && (
+                    {pkg.bonus > 0 && (
                       <Text style={styles.pkgBonus}>+{pkg.bonus} Bonus</Text>
                     )}
                     <Text style={styles.pkgPrice}>{formatRupiah(pkg.price)}</Text>
@@ -239,68 +261,71 @@ export default function GameDetail({
               </View>
             </View>
 
+            {selectedPkgData && (
+              <View style={styles.card}>
+                <Text style={styles.cardTitle}>Jumlah Paket</Text>
+                <View style={styles.qtyRow}>
+                  <TouchableOpacity
+                    style={[styles.qtyBtn, quantity <= 1 && styles.qtyBtnDisabled]}
+                    onPress={() => setQuantity(Math.max(1, quantity - 1))}
+                    disabled={quantity <= 1}
+                  >
+                    <Text style={styles.qtyBtnText}>−</Text>
+                  </TouchableOpacity>
+                  <View style={styles.qtyDisplay}>
+                    <Text style={styles.qtyValue}>{quantity}</Text>
+                    <Text style={styles.qtyLabel}>paket</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.qtyBtn, quantity >= 10 && styles.qtyBtnDisabled]}
+                    onPress={() => setQuantity(Math.min(10, quantity + 1))}
+                    disabled={quantity >= 10}
+                  >
+                    <Text style={styles.qtyBtnText}>+</Text>
+                  </TouchableOpacity>
+                </View>
+                {quantity > 1 && (
+                  <Text style={styles.qtyTotal}>
+                    Total: {formatRupiah(selectedPkgData.price * quantity)}
+                  </Text>
+                )}
+              </View>
+            )}
+
             <TouchableOpacity
-              style={[
-                styles.groupToggle,
-                groupMode && styles.groupToggleActive,
-              ]}
+              style={[styles.groupToggle, groupMode && styles.groupToggleActive]}
               onPress={() => setGroupMode(!groupMode)}
               activeOpacity={0.8}
             >
               <View style={styles.groupToggleLeft}>
                 <Text style={{ fontSize: 28 }}>👥</Text>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.groupToggleTitle}>
-                    Patungan dengan Teman?
-                  </Text>
+                  <Text style={styles.groupToggleTitle}>Patungan dengan Teman?</Text>
                   <Text style={styles.groupToggleSub}>
                     Hemat hingga 15% + cashback + bonus points
                   </Text>
                 </View>
               </View>
-              <View
-                style={[
-                  styles.toggleSwitch,
-                  groupMode && styles.toggleSwitchOn,
-                ]}
-              >
-                <View
-                  style={[
-                    styles.toggleKnob,
-                    groupMode && styles.toggleKnobOn,
-                  ]}
-                />
+              <View style={[styles.toggleSwitch, groupMode && styles.toggleSwitchOn]}>
+                <View style={[styles.toggleKnob, groupMode && styles.toggleKnobOn]} />
               </View>
             </TouchableOpacity>
 
             {groupMode && (
               <View style={styles.promoCard}>
                 <Text style={styles.promoTitle}>💰 Estimasi Hemat</Text>
-                <View style={styles.promoRow}>
-                  <Text style={styles.promoLabel}>2 orang</Text>
-                  <Text style={styles.promoVal}>-{getGroupDiscountPercent(2)}%</Text>
-                </View>
-                <View style={styles.promoRow}>
-                  <Text style={styles.promoLabel}>3 orang</Text>
-                  <Text style={styles.promoVal}>-{getGroupDiscountPercent(3)}%</Text>
-                </View>
-                <View style={styles.promoRow}>
-                  <Text style={styles.promoLabel}>4 orang</Text>
-                  <Text style={styles.promoVal}>-{getGroupDiscountPercent(4)}%</Text>
-                </View>
-                <View style={styles.promoRow}>
-                  <Text style={styles.promoLabel}>5 orang</Text>
-                  <Text style={[styles.promoVal, { color: "#22c55e" }]}>
-                    -{getGroupDiscountPercent(5)}% 🏆
-                  </Text>
-                </View>
+                {[2, 3, 4, 5].map((n) => (
+                  <View key={n} style={styles.promoRow}>
+                    <Text style={styles.promoLabel}>{n} orang</Text>
+                    <Text style={[styles.promoVal, n === 5 && { color: "#22c55e" }]}>
+                      -{getGroupDiscountPercent(n)}%{n === 5 ? " 🏆" : ""}
+                      {" "}(maks Rp {(n * 5000).toLocaleString("id-ID")})
+                    </Text>
+                  </View>
+                ))}
                 <View style={styles.promoDivider} />
-                <Text style={styles.promoBonus}>
-                  + 2% cashback ke wallet GamePay
-                </Text>
-                <Text style={styles.promoBonus}>
-                  + Bonus GamePay Points
-                </Text>
+                <Text style={styles.promoBonus}>+ 2% cashback ke wallet GamePay</Text>
+                <Text style={styles.promoBonus}>+ Bonus GamePay Points</Text>
               </View>
             )}
           </>
@@ -309,23 +334,13 @@ export default function GameDetail({
 
       <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
         <TouchableOpacity
-          style={[
-            styles.continueBtn,
-            !canContinue() && styles.continueBtnDisabled,
-          ]}
+          style={[styles.continueBtn, !canContinue() && styles.continueBtnDisabled]}
           onPress={onContinue}
           disabled={!canContinue()}
         >
-          <Text
-            style={[
-              styles.continueBtnText,
-              !canContinue() && styles.continueBtnTextDisabled,
-            ]}
-          >
+          <Text style={[styles.continueBtnText, !canContinue() && styles.continueBtnTextDisabled]}>
             {step === 1
-              ? groupMode
-                ? "Buat Group Order →"
-                : "Lanjut ke Pembayaran →"
+              ? groupMode ? "Buat Group Order →" : "Lanjut ke Pembayaran →"
               : "Lanjutkan →"}
           </Text>
         </TouchableOpacity>
@@ -335,14 +350,15 @@ export default function GameDetail({
 }
 
 const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1, backgroundColor: "#F5F5F5",
+    alignItems: "center", justifyContent: "center", gap: 12,
+  },
+  loadingText: { fontSize: 14, color: "#888" },
   container: { flex: 1, backgroundColor: "#F5F5F5" },
   header: {
-    backgroundColor: PRIMARY,
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
+    backgroundColor: PRIMARY, paddingHorizontal: 20,
+    paddingBottom: 16, flexDirection: "row", alignItems: "center", gap: 12,
   },
   backBtn: {
     width: 36, height: 36, borderRadius: 18,
@@ -363,20 +379,23 @@ const styles = StyleSheet.create({
   },
   stepLine: { flex: 1, height: 4, backgroundColor: "rgba(255,255,255,0.35)", borderRadius: 8 },
   stepLineActive: { backgroundColor: "#fff" },
-  stepLabelRow: { flexDirection: "row", backgroundColor: PRIMARY, paddingHorizontal: 20, paddingBottom: 16 },
+  stepLabelRow: {
+    flexDirection: "row", backgroundColor: PRIMARY,
+    paddingHorizontal: 20, paddingBottom: 16,
+  },
   stepLabel: { flex: 1, fontSize: 11, color: "rgba(255,255,255,0.5)", textAlign: "center" },
   stepLabelActive: { color: "#fff", fontWeight: "700" },
   card: { backgroundColor: "#fff", borderRadius: 14, padding: 16, marginBottom: 12 },
   cardTitle: { fontSize: 14, fontWeight: "700", color: "#333", marginBottom: 12 },
   cardSub: { fontSize: 12, color: "#aaa", marginBottom: 12, marginTop: -8 },
   input: {
-    backgroundColor: "#F5F5F5", borderRadius: 10, padding: 14,
-    fontSize: 16, color: "#333", marginBottom: 8,
+    backgroundColor: "#F5F5F5", borderRadius: 10,
+    padding: 14, fontSize: 16, color: "#333", marginBottom: 8,
   },
   inputHint: { fontSize: 12, color: "#aaa", marginBottom: 8 },
   previewBox: {
-    backgroundColor: "#FFFBEA", borderRadius: 10, padding: 12, marginTop: 12,
-    borderWidth: 1, borderColor: "#FFE4AD", gap: 4,
+    backgroundColor: "#FFFBEA", borderRadius: 10, padding: 12,
+    marginTop: 12, borderWidth: 1, borderColor: "#FFE4AD", gap: 4,
   },
   previewText: { fontSize: 13, color: "#555" },
   serverGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
@@ -406,6 +425,23 @@ const styles = StyleSheet.create({
   pkgBonus: { fontSize: 11, color: PRIMARY, fontWeight: "600", marginTop: 2 },
   pkgPrice: { fontSize: 13, color: "#555", marginTop: 6, fontWeight: "700" },
   pkgCheck: { fontSize: 16, color: PRIMARY, fontWeight: "800", marginTop: 4 },
+  qtyRow: {
+    flexDirection: "row", alignItems: "center",
+    justifyContent: "center", gap: 20,
+  },
+  qtyBtn: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: PRIMARY, alignItems: "center", justifyContent: "center",
+  },
+  qtyBtnDisabled: { backgroundColor: "#e0e0e0" },
+  qtyBtnText: { fontSize: 22, fontWeight: "700", color: "#fff" },
+  qtyDisplay: { alignItems: "center", minWidth: 60 },
+  qtyValue: { fontSize: 28, fontWeight: "800", color: "#1a1a1a" },
+  qtyLabel: { fontSize: 12, color: "#888" },
+  qtyTotal: {
+    textAlign: "center", marginTop: 12,
+    fontSize: 14, fontWeight: "700", color: PRIMARY,
+  },
   groupToggle: {
     backgroundColor: "#fff", borderRadius: 14, padding: 16,
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",

@@ -102,6 +102,9 @@ export default function Payment({
     server = "",
     members = 1,
     groupCode = null,
+    quantity = 1,
+    topupPackageId = null,
+    gameId = null,
   } = route?.params || {};
 
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -125,11 +128,12 @@ export default function Payment({
   );
 
   const breakdown: PriceBreakdown = useMemo(
-    () => calculatePriceBreakdown(pkg.price, members),
-    [pkg.price, members],
+    () => calculatePriceBreakdown(pkg.price, members, quantity),
+    [pkg.price, members, quantity],
   );
 
-  const myAmount = breakdown.pricePerPerson;
+  // Dalam desain baru, setiap orang bayar ordernya sendiri → total IS per-person
+  const myAmount = breakdown.total;
   const finalAmount = myAmount + (selectedMethod?.fee || 0);
 
   const toggle = (id: string) => setExpanded((p) => (p === id ? null : id));
@@ -174,7 +178,10 @@ export default function Payment({
     navigation.navigate("Processing", {
       game,
       gameEmoji,
+      gameId,
       package: pkg,
+      topupPackageId,
+      quantity,
       userId,
       server,
       paymentMethod: selectedMethod.child,
@@ -212,6 +219,7 @@ export default function Payment({
               <Text style={styles.orderDesc}>
                 {pkg?.amount} {pkg?.label || "Diamonds"}
                 {pkg?.bonus ? ` + ${pkg.bonus} Bonus` : ""}
+                {quantity > 1 ? ` × ${quantity}` : ""}
               </Text>
               {userId ? (
                 <Text style={styles.orderMeta}>
@@ -223,8 +231,8 @@ export default function Payment({
           </View>
           <View style={{ alignItems: "flex-end" }}>
             <Text style={styles.orderPrice}>{formatRupiah(myAmount)}</Text>
-            {breakdown.isGroupOrder && (
-              <Text style={styles.orderShare}>bagian kamu</Text>
+            {quantity > 1 && (
+              <Text style={styles.orderShare}>{quantity}× {formatRupiah(pkg.price)}</Text>
             )}
           </View>
         </View>
@@ -382,7 +390,9 @@ export default function Payment({
         <View style={styles.priceCard}>
           <Text style={styles.priceTitle}>Rincian Pembayaran</Text>
           <View style={styles.priceRow}>
-            <Text style={styles.priceLabel}>Harga Paket</Text>
+            <Text style={styles.priceLabel}>
+              {quantity > 1 ? `Harga Paket (×${quantity})` : "Harga Paket"}
+            </Text>
             <Text style={styles.priceVal}>{formatRupiah(breakdown.subtotal)}</Text>
           </View>
 
@@ -427,21 +437,11 @@ export default function Payment({
           </View>
 
           {breakdown.isGroupOrder && (
-            <>
-              <View style={styles.priceRow}>
-                <Text style={styles.totalLabel}>
-                  Bagian Kamu ({breakdown.members} org)
-                </Text>
-                <Text style={[styles.totalVal, { color: PRIMARY, fontSize: 18 }]}>
-                  {formatRupiah(finalAmount)}
-                </Text>
-              </View>
-              <View style={styles.bonusBox}>
-                <Text style={styles.bonusText}>
-                  🎁 Kamu dapat: Cashback {formatRupiah(Math.round(breakdown.cashback / breakdown.members))} + {Math.floor(breakdown.bonusPoints / breakdown.members)} pts
-                </Text>
-              </View>
-            </>
+            <View style={styles.bonusBox}>
+              <Text style={styles.bonusText}>
+                🎁 Group {breakdown.members} org • Cashback {formatRupiah(breakdown.cashback)} + {breakdown.bonusPoints} pts
+              </Text>
+            </View>
           )}
         </View>
       </ScrollView>
