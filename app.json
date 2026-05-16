@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "GamePay",
-    "slug": "GamePay",
+    "slug": "gamepay",
     "version": "1.0.0",
     "scheme": "gamepay",
     "orientation": "portrait",
