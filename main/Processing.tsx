@@ -65,7 +65,10 @@ export default function Processing({
   const {
     game,
     gameEmoji,
+    gameId = null,
     package: pkg,
+    topupPackageId = null,
+    quantity = 1,
     userId,
     server,
     paymentMethod,
@@ -121,9 +124,13 @@ export default function Processing({
       await supabase.from("transactions").insert({
         user_id: session.user.id,
         order_id: orderId,
+        game_id: gameId,
+        topup_package_id: topupPackageId,
         game_name: game,
         game_emoji: gameEmoji,
-        package_name: `${pkg?.amount} ${pkg?.label || "Diamonds"}`,
+        package_name: pkg?.name || `${pkg?.amount} ${pkg?.label || "Diamonds"}`,
+        unit_price: pkg?.price || 0,
+        quantity: quantity,
         amount: amount,
         bonus: pkg?.bonus || 0,
         status: "Completed",
@@ -239,7 +246,8 @@ export default function Processing({
           <View style={styles.orderRow}>
             <Text style={styles.orderLabel}>Paket</Text>
             <Text style={styles.orderVal}>
-              {pkg?.amount} {pkg?.label || "Diamonds"}
+              {pkg?.name || `${pkg?.amount} ${pkg?.label || "Diamonds"}`}
+              {quantity > 1 ? ` × ${quantity}` : ""}
             </Text>
           </View>
           <View style={styles.orderRow}>

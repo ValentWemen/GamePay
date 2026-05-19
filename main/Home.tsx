@@ -15,16 +15,16 @@ const PRIMARY = "#FFA800";
 const { width: SW } = Dimensions.get("window");
 
 const GAMES = [
-  { id: "1", name: "Mobile Legends", category: "MOBA", emoji: "🗡️", bg: "#EDECFF", badge: null },
-  { id: "2", name: "Free Fire", category: "FPS", emoji: "🔥", bg: "#FFFFDF", badge: "Hot" },
-  { id: "3", name: "PUBG Mobile", category: "FPS", emoji: "🎯", bg: "#FFFFF4", badge: null },
-  { id: "4", name: "Genshin Impact", category: "RPG", emoji: "✨", bg: "#EDF4FF", badge: "Promo" },
+  { id: "022c03ac-e449-4950-be95-b5fb6bedc2ac", name: "Mobile Legends", category: "MOBA", emoji: "🗡️", bg: "#EDECFF", badge: null },
+  { id: "aaaaaaaa-0000-0000-0000-000000000001", name: "Free Fire",      category: "FPS",  emoji: "🔥", bg: "#FFFFDF", badge: "Hot" },
+  { id: "aaaaaaaa-0000-0000-0000-000000000002", name: "PUBG Mobile",    category: "FPS",  emoji: "🎯", bg: "#FFFFF4", badge: null },
+  { id: "b3867163-23bf-48ba-8f59-b0de2560a568", name: "Genshin Impact", category: "RPG",  emoji: "✨", bg: "#EDF4FF", badge: "Promo" },
 ];
 
 const QUICK = [
-  { id: "1", name: "Mobile\nLegends", emoji: "🗡️" },
-  { id: "2", name: "Free Fire", emoji: "🔥" },
-  { id: "3", name: "PUBG\nMobile", emoji: "🎯" },
+  { id: "022c03ac-e449-4950-be95-b5fb6bedc2ac", name: "Mobile\nLegends", emoji: "🗡️" },
+  { id: "aaaaaaaa-0000-0000-0000-000000000001", name: "Free Fire",        emoji: "🔥" },
+  { id: "aaaaaaaa-0000-0000-0000-000000000002", name: "PUBG\nMobile",     emoji: "🎯" },
 ];
 
 const BANNERS = [

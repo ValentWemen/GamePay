@@ -109,6 +109,14 @@ export function getGroupDiscountPercent(members: number): number {
   return 15;
 }
 
+// Cap diskon per orang: members × Rp 5.000, maksimal Rp 25.000
+export const GROUP_DISCOUNT_CAP_PER_MEMBER = 5000;
+export const MAX_GROUP_DISCOUNT_CAP = 25000;
+
+export function getGroupDiscountCap(members: number): number {
+  return Math.min(members * GROUP_DISCOUNT_CAP_PER_MEMBER, MAX_GROUP_DISCOUNT_CAP);
+}
+
 /**
  * Cashback 2% ke wallet GamePay (hanya untuk group order)
  */
@@ -139,6 +147,8 @@ export const SERVICE_FEE = 1000; // Rp 1.000 flat
 // ============================================================
 
 export interface PriceBreakdown {
+  unitPrice: number;
+  quantity: number;
   subtotal: number;
   groupDiscount: number;
   groupDiscountPercent: number;
@@ -155,20 +165,26 @@ export interface PriceBreakdown {
 export function calculatePriceBreakdown(
   basePrice: number,
   members: number = 1,
+  quantity: number = 1,
 ): PriceBreakdown {
+  const subtotal = basePrice * quantity;
   const isGroup = members > 1;
   const discountPct = getGroupDiscountPercent(members);
-  const discount = Math.round((basePrice * discountPct) / 100);
-  const afterDiscount = basePrice - discount;
+  const discountRaw = Math.round((subtotal * discountPct) / 100);
+  const discountCap = isGroup ? getGroupDiscountCap(members) : 0;
+  const discount = isGroup ? Math.min(discountRaw, discountCap) : 0;
+  const afterDiscount = subtotal - discount;
   const serviceFee = SERVICE_FEE;
   const tax = calculateTax(afterDiscount);
   const total = afterDiscount + serviceFee + tax;
   const perPerson = Math.ceil(total / members);
-  const cashback = getGroupCashback(basePrice, members);
-  const bonusPoints = getGroupBonusPoints(basePrice, members);
+  const cashback = getGroupCashback(subtotal, members);
+  const bonusPoints = getGroupBonusPoints(subtotal, members);
 
   return {
-    subtotal: basePrice,
+    unitPrice: basePrice,
+    quantity,
+    subtotal,
     groupDiscount: discount,
     groupDiscountPercent: discountPct,
     serviceFee,
