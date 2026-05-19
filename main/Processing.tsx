@@ -10,8 +10,11 @@ import {
   ActivityIndicator,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import * as LocalAuthentication from "expo-local-authentication";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../user/Supabase";
+import { BIOMETRIC_KEY } from "../user/SecuritySettings";
 import { formatRupiah, formatVA, generateQRISPayload } from "../utils/helpers";
 
 const PRIMARY = "#FFA800";
@@ -250,6 +253,24 @@ export default function Processing({
   };
 
   const confirmPayment = async () => {
+    // Cek apakah biometrik diaktifkan user di SecuritySettings
+    const biometricEnabled = await AsyncStorage.getItem(BIOMETRIC_KEY);
+    if (biometricEnabled === "true") {
+      const hasHardware = await LocalAuthentication.hasHardwareAsync();
+      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+      if (hasHardware && isEnrolled) {
+        const result = await LocalAuthentication.authenticateAsync({
+          promptMessage: "Konfirmasi Pembayaran",
+          cancelLabel: "Batal",
+          fallbackLabel: "Gunakan PIN",
+        });
+        if (!result.success) {
+          Alert.alert("Autentikasi Gagal", "Pembayaran dibatalkan.");
+          return;
+        }
+      }
+    }
+
     setConfirming(true);
     try {
       const {

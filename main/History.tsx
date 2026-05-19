@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -10,9 +10,14 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
+import { Accelerometer } from "expo-sensors";
+import * as Haptics from "expo-haptics";
 import { supabase } from "../user/Supabase";
 import BottomNav from "./BottomNav";
 import { formatRupiah, formatDateID } from "../utils/helpers";
+
+const SHAKE_THRESHOLD = 2.5; // gravitasi (g), di atas ini = dikocok
+const SHAKE_COOLDOWN = 1500; // ms debounce antar shake
 
 const PRIMARY = "#FFA800";
 const FILTERS = [
@@ -42,6 +47,8 @@ export default function History({ navigation }: { navigation: any }) {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [shaking, setShaking] = useState(false);
+  const lastShakeRef = useRef<number>(0);
 
   const fetchHistory = async () => {
     try {
@@ -75,6 +82,23 @@ export default function History({ navigation }: { navigation: any }) {
   useFocusEffect(
     useCallback(() => {
       fetchHistory();
+
+      // Shake to refresh via accelerometer
+      Accelerometer.setUpdateInterval(100);
+      const accelSub = Accelerometer.addListener(({ x, y, z }) => {
+        const magnitude = Math.sqrt(x * x + y * y + z * z);
+        const now = Date.now();
+        if (magnitude > SHAKE_THRESHOLD && now - lastShakeRef.current > SHAKE_COOLDOWN) {
+          lastShakeRef.current = now;
+          setShaking(true);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          setRefreshing(true);
+          fetchHistory();
+          setTimeout(() => setShaking(false), 800);
+        }
+      });
+
+      return () => accelSub.remove();
     }, []),
   );
 
@@ -210,6 +234,12 @@ export default function History({ navigation }: { navigation: any }) {
         ))}
       </View>
 
+      <View style={[styles.shakeHint, shaking && styles.shakeHintActive]}>
+        <Text style={styles.shakeHintText}>
+          {shaking ? "🔄 Memperbarui..." : "📳 Kocok HP untuk refresh"}
+        </Text>
+      </View>
+
       {loading ? (
         <ActivityIndicator color={PRIMARY} style={{ marginTop: 40 }} />
       ) : (
@@ -297,4 +327,10 @@ const styles = StyleSheet.create({
   txDate: { fontSize: 11, color: "#bbb" },
   txAmount: { fontSize: 14, fontWeight: "800", color: "#1a1a1a" },
   txArrow: { fontSize: 14, color: "#ccc", marginTop: 4 },
+  shakeHint: {
+    backgroundColor: "#fff", paddingVertical: 6, alignItems: "center",
+    borderBottomWidth: 1, borderBottomColor: "#f0f0f0",
+  },
+  shakeHintActive: { backgroundColor: "#FFFBEA" },
+  shakeHintText: { fontSize: 11, color: "#bbb" },
 });

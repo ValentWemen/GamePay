@@ -19,6 +19,7 @@
       "infoPlist": {
         "NSCameraUsageDescription": "GamePay butuh akses kamera untuk scan QR code group order dan QRIS pembayaran.",
         "NSPhotoLibraryUsageDescription": "GamePay butuh akses galeri untuk mengubah foto profil kamu.",
+        "NSFaceIDUsageDescription": "GamePay menggunakan Face ID untuk memverifikasi identitas kamu sebelum konfirmasi pembayaran.",
         "LSApplicationQueriesSchemes": [
           "gojek",
           "ovo",
