@@ -250,6 +250,14 @@ WHERE NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = u.id);
 -- SELECT * FROM public.profiles LIMIT 5;
 
 -- ============================================================
+-- PATCH: GameKoin - Wallet refund per user
+-- ============================================================
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS gamekoin_balance INTEGER DEFAULT 0;
+
+-- Policy: user bisa update gamekoin_balance miliknya sendiri (sudah tercakup profiles_update_own)
+-- Edge function (service role) juga bisa update saat refund
+
+-- ============================================================
 -- PATCH: Group Order v2 - Setiap member punya order sendiri
 -- Tambahkan kolom order ke group_members
 -- ============================================================
@@ -264,3 +272,72 @@ ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS target_server TEXT;
 DROP POLICY IF EXISTS "group_members_update_self" ON public.group_members;
 CREATE POLICY "group_members_update_self" ON public.group_members
   FOR UPDATE USING (auth.uid() = user_id);
+
+-- ============================================================
+-- PATCH: groups.game_id + group_members unit fields (WAJIB untuk Group Order v2)
+-- ============================================================
+-- groups: perlu game_id untuk lookup paket saat join
+ALTER TABLE public.groups ADD COLUMN IF NOT EXISTS game_id UUID REFERENCES public.games(id);
+
+-- group_members: perlu unit_price, quantity, topup_package_id untuk kalkulasi per-member
+ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS unit_price INTEGER DEFAULT 0;
+ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
+ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS topup_package_id UUID REFERENCES public.topup_packages(id);
+
+-- ============================================================
+-- PATCH: Cancel Group Order dengan refund ke GameKoin
+-- Fungsi SECURITY DEFINER agar host bisa refund ke member lain
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.cancel_group_order(p_group_id UUID)
+RETURNS void AS $$
+DECLARE
+  v_member RECORD;
+  v_amount INTEGER;
+  v_group_code TEXT;
+BEGIN
+  -- Pastikan pemanggil adalah host
+  IF NOT EXISTS (
+    SELECT 1 FROM public.groups WHERE id = p_group_id AND host_id = auth.uid()
+  ) THEN
+    RAISE EXCEPTION 'Hanya host yang bisa membatalkan group order';
+  END IF;
+
+  -- Pastikan host sudah bayar
+  IF NOT EXISTS (
+    SELECT 1 FROM public.group_members
+    WHERE group_id = p_group_id AND user_id = auth.uid() AND payment_status = 'paid'
+  ) THEN
+    RAISE EXCEPTION 'Host harus sudah bayar sebelum membatalkan';
+  END IF;
+
+  -- Ambil kode group
+  SELECT code INTO v_group_code FROM public.groups WHERE id = p_group_id;
+
+  -- Proses refund untuk semua member yang sudah bayar
+  FOR v_member IN
+    SELECT user_id, id as member_id
+    FROM public.group_members
+    WHERE group_id = p_group_id AND payment_status = 'paid'
+  LOOP
+    -- Ambil jumlah transaksi
+    SELECT amount INTO v_amount
+    FROM public.transactions
+    WHERE user_id = v_member.user_id AND group_code = v_group_code
+    ORDER BY created_at DESC
+    LIMIT 1;
+
+    IF v_amount IS NOT NULL AND v_amount > 0 THEN
+      UPDATE public.profiles
+      SET gamekoin_balance = COALESCE(gamekoin_balance, 0) + v_amount
+      WHERE id = v_member.user_id;
+    END IF;
+
+    UPDATE public.group_members
+    SET payment_status = 'refunded'
+    WHERE id = v_member.member_id;
+  END LOOP;
+
+  -- Set status group ke cancelled
+  UPDATE public.groups SET status = 'cancelled' WHERE id = p_group_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;

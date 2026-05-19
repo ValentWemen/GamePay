@@ -113,7 +113,11 @@ export default function History({ navigation }: { navigation: any }) {
     const isProcessing = item.status === "Processing";
 
     return (
-      <TouchableOpacity style={styles.txCard} activeOpacity={0.85}>
+      <TouchableOpacity
+        style={styles.txCard}
+        activeOpacity={0.85}
+        onPress={() => navigation.navigate("TransactionDetail", { transaction: item })}
+      >
         <View style={[styles.txIcon, { backgroundColor: bg }]}>
           <Text style={{ fontSize: 24 }}>{emoji}</Text>
         </View>

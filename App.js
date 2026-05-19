@@ -23,6 +23,7 @@ import Payment from './main/Payment';
 import Processing from './main/Processing';
 import PaymentSuccess from './main/PaymentSuccess';
 import News from './main/News';
+import TransactionDetail from './main/TransactionDetail';
 
 // Settings screens
 import HelpCenter from './user/HelpCenter';
@@ -100,6 +101,7 @@ export default function App() {
           <RootStack.Screen name="Processing" component={Processing} options={{ animation: 'fade' }} />
           <RootStack.Screen name="PaymentSuccess" component={PaymentSuccess} options={{ animation: 'fade' }} />
           <RootStack.Screen name="News" component={News} options={{ animation: 'slide_from_right' }} />
+          <RootStack.Screen name="TransactionDetail" component={TransactionDetail} options={{ animation: 'slide_from_right' }} />
 
           {/* Account sub-screens */}
           <RootStack.Screen name="HelpCenter" component={HelpCenter} options={{ animation: 'slide_from_right' }} />

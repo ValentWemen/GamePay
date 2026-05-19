@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { supabase } from "../user/Supabase";
 import {
   formatRupiah,
   generateVA,
@@ -113,6 +114,20 @@ export default function Payment({
     child: string;
     fee: number;
   } | null>(null);
+  const [gamekoinBalance, setGamekoinBalance] = useState(0);
+
+  useEffect(() => {
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      const { data } = await supabase
+        .from("profiles")
+        .select("gamekoin_balance")
+        .eq("id", session.user.id)
+        .single();
+      setGamekoinBalance(data?.gamekoin_balance || 0);
+    })();
+  }, []);
 
   const orderId = useMemo(() => generateOrderId(), []);
   const vaNumbers = useMemo(
@@ -132,11 +147,20 @@ export default function Payment({
     [pkg.price, members, quantity],
   );
 
-  // Dalam desain baru, setiap orang bayar ordernya sendiri → total IS per-person
+  // Setiap orang bayar ordernya sendiri
   const myAmount = breakdown.total;
-  const finalAmount = myAmount + (selectedMethod?.fee || 0);
+  // GameKoin otomatis dipakai duluan
+  const gamekoinUsed = Math.min(gamekoinBalance, myAmount);
+  const remainingAfterGK = myAmount - gamekoinUsed;
+  // Jika masih ada sisa, tambah biaya channel metode pembayaran
+  const finalAmount = remainingAfterGK + (selectedMethod?.fee || 0);
+  const paidFullyByGK = remainingAfterGK === 0;
 
   const toggle = (id: string) => setExpanded((p) => (p === id ? null : id));
+
+  const selectMethod = (parent: string, child: string, fee: number) => {
+    setSelectedMethod({ parent, child, fee });
+  };
 
   const copyVA = async (va: string, bank: string) => {
     await Clipboard.setStringAsync(va);
@@ -174,7 +198,7 @@ export default function Payment({
   };
 
   const onPay = () => {
-    if (!selectedMethod) return;
+    if (!paidFullyByGK && !selectedMethod) return;
     navigation.navigate("Processing", {
       game,
       gameEmoji,
@@ -184,11 +208,14 @@ export default function Payment({
       quantity,
       userId,
       server,
-      paymentMethod: selectedMethod.child,
-      paymentParent: selectedMethod.parent,
+      paymentMethod: paidFullyByGK ? "GameKoin" : selectedMethod!.child,
+      paymentParent: paidFullyByGK ? "gamekoin" : selectedMethod!.parent,
       orderId,
-      vaNumber: vaNumbers[selectedMethod.child as keyof typeof vaNumbers],
-      amount: finalAmount,
+      vaNumber: paidFullyByGK
+        ? null
+        : vaNumbers[selectedMethod!.child as keyof typeof vaNumbers],
+      amount: myAmount,
+      gamekoinUsed,
       members,
       groupCode,
       breakdown,
@@ -266,7 +293,37 @@ export default function Payment({
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.sectionTitle}>Pilih Metode Pembayaran</Text>
+        {/* Banner GameKoin otomatis */}
+        {gamekoinUsed > 0 && (
+          <View style={styles.gkBanner}>
+            <Text style={styles.gkBannerIcon}>🪙</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.gkBannerTitle}>
+                GameKoin dipakai otomatis
+              </Text>
+              <Text style={styles.gkBannerSub}>
+                -{formatRupiah(gamekoinUsed)} dari saldo {formatRupiah(gamekoinBalance)}
+                {paidFullyByGK ? " → lunas!" : ` → sisa ${formatRupiah(remainingAfterGK)}`}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {paidFullyByGK ? (
+          <View style={styles.gkFullCard}>
+            <Text style={styles.gkFullIcon}>✅</Text>
+            <Text style={styles.gkFullTitle}>Seluruh pembayaran ditanggung GameKoin</Text>
+            <Text style={styles.gkFullSub}>
+              Tidak perlu metode pembayaran lain
+            </Text>
+          </View>
+        ) : (
+          <>
+            <Text style={styles.sectionTitle}>
+              {gamekoinUsed > 0
+                ? `Bayar Sisa ${formatRupiah(remainingAfterGK)} via:`
+                : "Pilih Metode Pembayaran"}
+            </Text>
 
         {PAYMENT_METHODS.map((m) => (
           <View key={m.id} style={styles.methodCard}>
@@ -304,11 +361,7 @@ export default function Payment({
                           isSelected && styles.childItemActive,
                         ]}
                         onPress={() =>
-                          setSelectedMethod({
-                            parent: m.id,
-                            child: c.id,
-                            fee: c.fee || 0,
-                          })
+                          selectMethod(m.id, c.id, c.fee || 0)
                         }
                       >
                         <View style={styles.childLeft}>
@@ -386,6 +439,8 @@ export default function Payment({
             )}
           </View>
         ))}
+          </>
+        )}
 
         <View style={styles.priceCard}>
           <Text style={styles.priceTitle}>Rincian Pembayaran</Text>
@@ -448,19 +503,21 @@ export default function Payment({
 
       <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
         <TouchableOpacity
-          style={[styles.payBtn, !selectedMethod && styles.payBtnDisabled]}
+          style={[styles.payBtn, (!paidFullyByGK && !selectedMethod) && styles.payBtnDisabled]}
           onPress={onPay}
-          disabled={!selectedMethod}
+          disabled={!paidFullyByGK && !selectedMethod}
         >
           <Text
             style={[
               styles.payBtnText,
-              !selectedMethod && styles.payBtnTextDisabled,
+              (!paidFullyByGK && !selectedMethod) && styles.payBtnTextDisabled,
             ]}
           >
-            {selectedMethod
-              ? `Bayar ${formatRupiah(finalAmount)}`
-              : "Pilih Metode Pembayaran"}
+            {paidFullyByGK
+              ? "Konfirmasi Pesanan (GameKoin)"
+              : selectedMethod
+                ? `Bayar ${formatRupiah(finalAmount)}`
+                : "Pilih Metode Pembayaran"}
           </Text>
         </TouchableOpacity>
       </View>
@@ -619,4 +676,31 @@ const styles = StyleSheet.create({
   payBtnDisabled: { backgroundColor: "#FFE4AD" },
   payBtnText: { fontSize: 16, fontWeight: "800", color: "#000" },
   payBtnTextDisabled: { color: "#bbb" },
+
+  gkBanner: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    backgroundColor: "#FFFBEA",
+    borderRadius: 12,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#FFE4AD",
+  },
+  gkBannerIcon: { fontSize: 22 },
+  gkBannerTitle: { fontSize: 13, fontWeight: "700", color: "#1a1a1a" },
+  gkBannerSub: { fontSize: 11, color: "#888", marginTop: 2 },
+  gkFullCard: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    backgroundColor: "#e6f9ee",
+    borderRadius: 14,
+    padding: 20,
+    alignItems: "center",
+  },
+  gkFullIcon: { fontSize: 36, marginBottom: 8 },
+  gkFullTitle: { fontSize: 15, fontWeight: "800", color: "#166534", textAlign: "center" },
+  gkFullSub: { fontSize: 12, color: "#16a34a", marginTop: 4, textAlign: "center" },
 });

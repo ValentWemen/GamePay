@@ -7,10 +7,14 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  Image,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback } from "react";
 import { supabase } from "../user/Supabase";
 import BottomNav from "./BottomNav";
+import { formatRupiah } from "../utils/helpers";
 
 const PRIMARY = "#FFA800";
 
@@ -42,27 +46,47 @@ export default function Account({ navigation }: { navigation: any }) {
   const insets = useSafeAreaInsets();
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) return;
-        const { data } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .single();
-        setProfile({ ...data, email: session.user.email });
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
+  const loadProfile = async () => {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return;
+      const { data } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", session.user.id)
+        .single();
+      const p = { ...data, email: session.user.email };
+      setProfile(p);
+
+      if (p?.avatar_url) {
+        const path = p.avatar_url.split("/avatars/")[1];
+        if (path) {
+          const { data: { publicUrl } } = supabase.storage
+            .from("avatars")
+            .getPublicUrl(path);
+          setAvatarUrl(`${publicUrl}?t=${Date.now()}`);
+        } else {
+          setAvatarUrl(p.avatar_url);
+        }
+      } else {
+        setAvatarUrl(null);
       }
-    })();
-  }, []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      loadProfile();
+    }, []),
+  );
 
   const onLogout = () => {
     Alert.alert("Keluar", "Yakin mau logout?", [
@@ -84,13 +108,19 @@ export default function Account({ navigation }: { navigation: any }) {
     );
 
   const displayName =
-    profile?.display_name || profile?.full_name || profile?.email?.split("@")[0] || "User";
+    profile?.display_name ||
+    profile?.full_name ||
+    profile?.email?.split("@")[0] ||
+    "User";
   const memberSince = profile?.created_at
     ? new Date(profile.created_at).toLocaleDateString("id-ID", {
         month: "long",
         year: "numeric",
       })
     : "Januari 2026";
+
+  const gamekoin = profile?.gamekoin_balance || 0;
+  const points = profile?.gamepay_points || 0;
 
   return (
     <View style={styles.container}>
@@ -101,12 +131,22 @@ export default function Account({ navigation }: { navigation: any }) {
           onPress={() => navigation.navigate("EditProfile")}
         >
           <View style={styles.avatarCircle}>
-            <Text style={{ fontSize: 28 }}>😊</Text>
+            {avatarUrl ? (
+              <Image
+                source={{ uri: avatarUrl }}
+                style={styles.avatarImage}
+                onError={() => setAvatarUrl(null)}
+              />
+            ) : (
+              <Text style={styles.avatarInitial}>
+                {displayName.charAt(0).toUpperCase()}
+              </Text>
+            )}
             <View style={styles.cameraIcon}>
               <Text style={{ fontSize: 10 }}>📷</Text>
             </View>
           </View>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.profileName}>{displayName}</Text>
             <Text style={styles.profileEmail}>{profile?.email}</Text>
             <Text style={styles.profileMember}>Bergabung sejak {memberSince}</Text>
@@ -115,6 +155,24 @@ export default function Account({ navigation }: { navigation: any }) {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 90 }}>
+        {/* GameKoin & Points */}
+        <View style={styles.walletRow}>
+          <View style={styles.walletCard}>
+            <Text style={styles.walletIcon}>🪙</Text>
+            <Text style={styles.walletLabel}>GameKoin</Text>
+            <Text style={styles.walletBalance}>{formatRupiah(gamekoin)}</Text>
+            <Text style={styles.walletSub}>Saldo refund kamu</Text>
+          </View>
+          <View style={[styles.walletCard, { backgroundColor: "#EDF4FF" }]}>
+            <Text style={styles.walletIcon}>⭐</Text>
+            <Text style={styles.walletLabel}>GamePay Points</Text>
+            <Text style={[styles.walletBalance, { color: "#3b82f6" }]}>
+              {points.toLocaleString("id-ID")} pts
+            </Text>
+            <Text style={styles.walletSub}>Poin loyalitas</Text>
+          </View>
+        </View>
+
         {MENU.map((section) => (
           <View key={section.section} style={{ marginBottom: 20 }}>
             <Text style={styles.sectionLabel}>{section.section}</Text>
@@ -164,73 +222,55 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
   },
   headerTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: "#fff",
-    marginBottom: 14,
+    fontSize: 22, fontWeight: "800", color: "#fff", marginBottom: 14,
   },
   profileCard: {
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    padding: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
+    backgroundColor: "#fff", borderRadius: 14, padding: 16,
+    flexDirection: "row", alignItems: "center", gap: 14,
   },
   avatarCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 56, height: 56, borderRadius: 28,
     backgroundColor: "#FFF8E8",
-    alignItems: "center",
-    justifyContent: "center",
-    position: "relative",
+    alignItems: "center", justifyContent: "center",
+    position: "relative", overflow: "hidden",
   },
+  avatarImage: { width: 56, height: 56, borderRadius: 28 },
+  avatarInitial: { fontSize: 24, fontWeight: "800", color: PRIMARY },
   cameraIcon: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 2,
-    borderWidth: 1,
-    borderColor: "#f0f0f0",
+    position: "absolute", bottom: 0, right: 0,
+    backgroundColor: "#fff", borderRadius: 10, padding: 2,
+    borderWidth: 1, borderColor: "#f0f0f0",
   },
   profileName: { fontSize: 16, fontWeight: "800", color: "#1a1a1a" },
   profileEmail: { fontSize: 12, color: "#888", marginTop: 2 },
   profileMember: { fontSize: 11, color: "#aaa", marginTop: 2 },
+
+  walletRow: { flexDirection: "row", gap: 10, marginBottom: 20 },
+  walletCard: {
+    flex: 1, backgroundColor: "#FFFBEA", borderRadius: 14, padding: 14,
+    alignItems: "center",
+  },
+  walletIcon: { fontSize: 24, marginBottom: 4 },
+  walletLabel: { fontSize: 11, fontWeight: "600", color: "#888", marginBottom: 4 },
+  walletBalance: { fontSize: 15, fontWeight: "800", color: PRIMARY },
+  walletSub: { fontSize: 10, color: "#aaa", marginTop: 2 },
+
   sectionLabel: {
-    fontSize: 12,
-    color: "#aaa",
-    fontWeight: "600",
-    marginBottom: 8,
-    textTransform: "uppercase",
+    fontSize: 12, color: "#aaa", fontWeight: "600",
+    marginBottom: 8, textTransform: "uppercase",
   },
   menuGroup: { backgroundColor: "#fff", borderRadius: 14, overflow: "hidden" },
-  menuItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 16,
-    gap: 12,
-  },
+  menuItem: { flexDirection: "row", alignItems: "center", padding: 16, gap: 12 },
   menuItemBorder: { borderBottomWidth: 1, borderBottomColor: "#F5F5F5" },
   menuIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
+    width: 36, height: 36, borderRadius: 10,
+    alignItems: "center", justifyContent: "center",
   },
   menuLabel: { flex: 1, fontSize: 14, fontWeight: "600", color: "#1a1a1a" },
   menuArrow: { fontSize: 16, color: "#ccc" },
   logoutBtn: {
-    borderWidth: 1.5,
-    borderColor: "#ef4444",
-    borderRadius: 14,
-    height: 50,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 8,
+    borderWidth: 1.5, borderColor: "#ef4444", borderRadius: 14,
+    height: 50, alignItems: "center", justifyContent: "center", marginTop: 8,
   },
   logoutText: { fontSize: 15, fontWeight: "700", color: "#ef4444" },
   version: { textAlign: "center", marginTop: 16, fontSize: 12, color: "#ccc" },
