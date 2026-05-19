@@ -17,7 +17,6 @@ import { formatRupiah, formatDateID } from "../utils/helpers";
 const PRIMARY = "#FFA800";
 const FILTERS = [
   { id: "All", label: "Semua" },
-  { id: "Group", label: "Group" },
   { id: "Completed", label: "Berhasil" },
   { id: "Processing", label: "Diproses" },
   { id: "Failed", label: "Gagal" },
@@ -87,9 +86,7 @@ export default function History({ navigation }: { navigation: any }) {
   const filtered =
     filter === "All"
       ? transactions
-      : filter === "Group"
-        ? transactions.filter((t) => t.is_group_order)
-        : transactions.filter((t) => t.status === filter);
+      : transactions.filter((t) => t.status === filter);
 
   const total = transactions.length;
   const now = new Date();
@@ -116,7 +113,11 @@ export default function History({ navigation }: { navigation: any }) {
     const isProcessing = item.status === "Processing";
 
     return (
-      <TouchableOpacity style={styles.txCard} activeOpacity={0.85}>
+      <TouchableOpacity
+        style={styles.txCard}
+        activeOpacity={0.85}
+        onPress={() => navigation.navigate("TransactionDetail", { transaction: item })}
+      >
         <View style={[styles.txIcon, { backgroundColor: bg }]}>
           <Text style={{ fontSize: 24 }}>{emoji}</Text>
         </View>

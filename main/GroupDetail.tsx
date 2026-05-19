@@ -9,11 +9,12 @@ import {
   Alert,
   ActivityIndicator,
   TextInput,
+  Linking,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
-import * as Linking from "expo-linking";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../user/Supabase";
+import UserAvatar from "../components/UserAvatar";
 import {
   formatRupiah,
   formatDuration,
@@ -21,7 +22,6 @@ import {
   getGroupDiscountPercent,
   calculatePriceBreakdown,
 } from "../utils/helpers";
-import { GroupNotifications } from "../utils/notifications";
 
 const PRIMARY = "#FFA800";
 const SERVERS = ["Asia", "Europe", "Americas", "SEA"];
@@ -33,6 +33,28 @@ interface PackageData {
   bonus: number;
   price: number;
   is_popular: boolean;
+}
+
+const TAGIH_TEMPLATES = [
+  "Bro {name}, jangan lupa bayar bagian top-up ya 🙏 udah {minutes} menit nih. Join di sini: {link}",
+  "Halo {name}, squad nungguin nih buat top-up-nya. Bayar dulu yuk 😄 {link}",
+  "{name}, satu langkah lagi buat top-up jalan! {link}",
+  "Eh {name}, tinggal kamu doang belum bayar nih 😬 Gas dulu: {link}",
+];
+
+function tagihHalus(memberName: string, groupCode: string, minutesWaiting: number) {
+  const template = TAGIH_TEMPLATES[Math.floor(Math.random() * TAGIH_TEMPLATES.length)];
+  const link = `https://gamepay.app/join/${groupCode}`;
+  const message = template
+    .replace("{name}", memberName)
+    .replace("{minutes}", String(minutesWaiting))
+    .replace("{link}", link);
+
+  const url = `whatsapp://send?text=${encodeURIComponent(message)}`;
+  Linking.openURL(url).catch(() => {
+    Clipboard.setStringAsync(message);
+    Alert.alert("WhatsApp tidak tersedia", "Pesan sudah disalin ke clipboard. Paste sendiri ya!");
+  });
 }
 
 export default function GroupDetail({
@@ -52,6 +74,7 @@ export default function GroupDetail({
 
   const [loading, setLoading] = useState(!isCreating);
   const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [groupData, setGroupData] = useState<any>(null);
   const [members, setMembers] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -70,131 +93,19 @@ export default function GroupDetail({
   const [showJoinForm, setShowJoinForm] = useState(false);
 
   useEffect(() => {
-    loadCurrentUser();
-    if (!isCreating && (groupId || deepLinkCode)) {
-      loadGroup();
-    } else {
-      setLoading(false);
-    }
-  }, []);
-
-  // ============================================================
-  // REALTIME SUBSCRIPTION - notifikasi saat member join/bayar
-  // ============================================================
-  useEffect(() => {
-    if (!groupData?.id || !currentUser?.id) return;
-
-    const channelName = `group-${groupData.id}-${Date.now()}`;
-    console.log(`[Realtime] Subscribing to channel: ${channelName}`);
-    console.log(`[Realtime] Group ID: ${groupData.id}`);
-    console.log(`[Realtime] Current User: ${currentUser.id} (is host: ${currentUser.id === groupData.host_id})`);
-
-    // Subscribe ke perubahan di group_members table untuk group ini
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "group_members",
-          filter: `group_id=eq.${groupData.id}`,
-        },
-        async (payload) => {
-          console.log("[Realtime] 🟢 INSERT group_members:", payload.new);
-          const newMember = payload.new as any;
-          // Trigger notif hanya kalau:
-          // - User saat ini adalah host
-          // - Yang join BUKAN host sendiri (jangan notif diri sendiri)
-          if (
-            currentUser?.id === groupData.host_id &&
-            newMember.user_id !== currentUser?.id
-          ) {
-            console.log("[Realtime] 🔔 Triggering newMemberJoined notification");
-            await GroupNotifications.newMemberJoined(
-              newMember.user_name || "Seseorang",
-              groupData.game_name,
-            );
-          } else {
-            console.log("[Realtime] ⏭️ Skip notif (not host or self-join)");
-          }
-          // Refresh member list
-          loadGroup();
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "group_members",
-          filter: `group_id=eq.${groupData.id}`,
-        },
-        async (payload) => {
-          console.log("[Realtime] 🔄 UPDATE group_members:", payload.new);
-          const updated = payload.new as any;
-          const old = payload.old as any;
-
-          // Member baru bayar (payment_status berubah ke 'paid')
-          if (
-            old?.payment_status !== "paid" &&
-            updated?.payment_status === "paid" &&
-            updated.user_id !== currentUser?.id // jangan notif diri sendiri
-          ) {
-            console.log("[Realtime] 🔔 Triggering memberPaid notification");
-            await GroupNotifications.memberPaid(
-              updated.user_name || "Member",
-            );
-          }
-          loadGroup();
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "groups",
-          filter: `id=eq.${groupData.id}`,
-        },
-        async (payload) => {
-          console.log("[Realtime] 🔄 UPDATE groups:", payload.new);
-          const updated = payload.new as any;
-          const old = payload.old as any;
-
-          // Group baru penuh
-          if (
-            old?.current_members < old?.target_members &&
-            updated?.current_members === updated?.target_members
-          ) {
-            console.log("[Realtime] 🔔 Triggering groupFull notification");
-            await GroupNotifications.groupFull(updated.game_name);
-          }
-          // Group selesai (semua bayar)
-          if (old?.status !== "completed" && updated?.status === "completed") {
-            console.log("[Realtime] 🔔 Triggering allPaid notification");
-            await GroupNotifications.allPaid(updated.game_name);
-          }
-          loadGroup();
-        },
-      )
-      .subscribe((status, err) => {
-        console.log(`[Realtime] Status: ${status}`);
-        if (err) console.error(`[Realtime] Error:`, err);
-        if (status === "SUBSCRIBED") {
-          console.log("[Realtime] ✅ Successfully subscribed!");
-        }
-        if (status === "CHANNEL_ERROR") {
-          console.error("[Realtime] ❌ Channel error - Realtime mungkin belum di-enable di Supabase");
-        }
-      });
-
-    // Cleanup saat unmount
-    return () => {
-      console.log(`[Realtime] Unsubscribing channel: ${channelName}`);
-      supabase.removeChannel(channel);
+    // Tunggu user load selesai DULU, baru load group.
+    // Kalau paralel, loadGroup bisa set loading=false sebelum currentUser ada
+    // → isHost & myMembership salah di render pertama (host lihat tombol "Ikut Group").
+    const init = async () => {
+      await loadCurrentUser();
+      if (!isCreating && (groupId || deepLinkCode)) {
+        loadGroup();
+      } else {
+        setLoading(false);
+      }
     };
-  }, [groupData?.id, currentUser?.id]);
+    init();
+  }, []);
 
   const loadCurrentUser = async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -230,8 +141,10 @@ export default function GroupDetail({
       }
 
       const { data: memberData } = await supabase
-        .from("group_members").select("*")
-        .eq("group_id", group.id).order("joined_at", { ascending: true });
+        .from("group_members")
+        .select("*")
+        .eq("group_id", group.id)
+        .order("joined_at", { ascending: true });
 
       setGroupData(group);
       setMembers(memberData || []);
@@ -266,17 +179,19 @@ export default function GroupDetail({
   // Breakdown per-member menggunakan formula baru (per-orang, dengan cap)
   const groupBreakdown = useMemo(() => {
     if (!groupData || members.length === 0) return null;
-    const confirmed = members.filter(
-      (m) => (m.unit_price || m.package_price) > 0
-    );
+    const confirmed = members.filter((m) => m.package_price > 0 || m.unit_price > 0);
     if (confirmed.length === 0) return null;
 
     const memberBreakdowns = confirmed.map((m: any) => {
-      const unitPrice = m.unit_price || m.package_price;
       const qty = m.quantity || 1;
+      // unit_price DEFAULT 0 → falsy di JS, harus cek > 0 bukan || fallback
+      const unitPrice = m.unit_price > 0
+        ? Math.round(m.unit_price)
+        : Math.round((m.package_price || 0) / qty);
       const bd = calculatePriceBreakdown(unitPrice, groupData.target_members, qty);
       return {
         ...m,
+        unitPriceResolved: unitPrice, // per-unit yang sudah dikoreksi
         breakdown: bd,
         memberDiscount: bd.groupDiscount,
         memberFinal: bd.total,
@@ -284,10 +199,9 @@ export default function GroupDetail({
     });
 
     const grandTotal = memberBreakdowns.reduce((s, m) => s + m.memberFinal, 0);
-    const totalDiscount = memberBreakdowns.reduce((s, m) => s + m.memberDiscount, 0);
     const discountPct = getGroupDiscountPercent(groupData.target_members);
 
-    return { discountPct, memberBreakdowns, grandTotal, totalDiscount };
+    return { discountPct, memberBreakdowns, grandTotal };
   }, [groupData, members]);
 
   // Breakdown host (create mode) — pakai formula baru
@@ -314,7 +228,6 @@ export default function GroupDetail({
         package_amount: pkg.amount,
         package_bonus: pkg.bonus || 0,
         package_price: pkg.price * quantity,
-        topup_package_id: pkg.id || null,
         target_user_id: userId,
         target_server: server || null,
         target_members: targetMembers,
@@ -329,7 +242,7 @@ export default function GroupDetail({
         return;
       }
 
-      await supabase.from("group_members").insert({
+      const { error: memberErr } = await supabase.from("group_members").insert({
         group_id: newGroup.id,
         user_id: currentUser.id,
         user_name: currentUser.name,
@@ -339,12 +252,18 @@ export default function GroupDetail({
         game_emoji: gameEmoji,
         topup_package_id: pkg.id || null,
         package_name: `${pkg.amount} ${pkg.label || "Diamonds"}`,
-        unit_price: pkg.price,
+        unit_price: Math.round(pkg.price),
         quantity: quantity,
-        package_price: pkg.price * quantity,
+        package_price: Math.round(pkg.price * quantity),
         target_user_id: userId,
         target_server: server || null,
       });
+
+      if (memberErr) {
+        Alert.alert("Gagal Membuat Group", `Member insert: ${memberErr.message}`);
+        setSubmitting(false);
+        return;
+      }
 
       navigation.replace("GroupDetail", { groupId: newGroup.id });
     } catch (e) {
@@ -405,9 +324,6 @@ export default function GroupDetail({
 
   const goToPayMember = (member: any) => {
     if (!groupData) return;
-    const myBreakdown = groupBreakdown?.memberBreakdowns.find(
-      (mb: any) => mb.user_id === member.user_id
-    );
     navigation.navigate("Payment", {
       gameId: groupData.game_id,
       game: member.game_name || groupData.game_name,
@@ -415,7 +331,9 @@ export default function GroupDetail({
       topupPackageId: member.topup_package_id,
       package: {
         id: member.topup_package_id,
-        price: member.unit_price || member.package_price,
+        price: member.unit_price > 0
+          ? Math.round(member.unit_price)
+          : Math.round((member.package_price || 0) / (member.quantity || 1)),
         name: member.package_name,
         label: "",
       },
@@ -430,40 +348,60 @@ export default function GroupDetail({
 
   const shareGroup = async () => {
     if (!groupData) return;
-
-    // Universal Link (untuk production build dengan domain hosting)
     const universalUrl = `https://gamepay.app/join/${groupData.code}`;
-
-    // Custom scheme - work di production APK
-    // Expo akan auto-handle scheme "gamepay://" yang sudah dideklarasi di app.json
-    const schemeUrl = `gamepay://join/${groupData.code}`;
-
-    // Linking.createURL akan otomatis pilih scheme/universal sesuai environment
-    const dynamicUrl = Linking.createURL(`/join/${groupData.code}`);
-
     const discountPct = getGroupDiscountPercent(groupData.target_members);
-
-    // Format pesan ala Gojek - link di awal supaya WhatsApp auto-preview
     const msg =
-      `🎮 Yuk join *Group Order GamePay* di ${groupData.game_name}!\n\n` +
-      `💰 Hemat *${discountPct}%* kalau patungan ${groupData.target_members} orang.\n` +
-      `Masing-masing pilih paket sendiri — tapi bayar lebih murah bareng!\n\n` +
-      `👉 Klik link untuk join langsung:\n${universalUrl}\n\n` +
-      `Atau buka GamePay → tab Group → "Pakai Kode": *${groupData.code}*`;
-
-    try {
-      await Share.share({
-        message: msg,
-        url: universalUrl, // iOS akan show link preview
-        title: `Join Group Order ${groupData.game_name}`,
-      });
-    } catch {}
+      `🎮 Yuk join *Group Order GamePay*!\n\n` +
+      `💰 Diskon *${discountPct}%* untuk ${groupData.target_members} orang!\n` +
+      `Masing-masing pilih paket sendiri — tapi bayar lebih murah bareng.\n\n` +
+      `✅ Cara join:\n1. Buka GamePay → tab Group → "Punya kode dari temen?"\n` +
+      `2. Masukkan kode: *${groupData.code}*\n3. Pilih paket game kamu\n4. Bayar bagianmu!\n\n` +
+      `Atau klik: ${universalUrl}`;
+    try { await Share.share({ message: msg, url: universalUrl }); } catch {}
   };
 
   const copyCode = async () => {
     if (!groupData) return;
     await Clipboard.setStringAsync(groupData.code);
     Alert.alert("✓ Tersalin", "Kode group berhasil disalin");
+  };
+
+  const handleCancelGroup = () => {
+    if (!groupData) return;
+    const paidCount = members.filter((m) => m.payment_status === "paid").length;
+    Alert.alert(
+      "Batalkan Group Order?",
+      `${paidCount} member yang sudah bayar akan mendapat refund penuh ke GameKoin masing-masing.`,
+      [
+        { text: "Tidak", style: "cancel" },
+        {
+          text: "Batalkan Group",
+          style: "destructive",
+          onPress: async () => {
+            setCancelling(true);
+            try {
+              const { error } = await supabase.rpc("cancel_group_order", {
+                p_group_id: groupData.id,
+              });
+              if (error) {
+                Alert.alert("Gagal", error.message);
+              } else {
+                Alert.alert(
+                  "Group Dibatalkan",
+                  `Refund untuk ${paidCount} member telah diproses ke GameKoin.`,
+                  [{ text: "OK", onPress: () => navigation.goBack() }]
+                );
+              }
+            } catch (e) {
+              console.error(e);
+              Alert.alert("Error", "Gagal membatalkan group.");
+            } finally {
+              setCancelling(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   if (loading) {
@@ -488,7 +426,7 @@ export default function GroupDetail({
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
             <Text style={styles.backArrow}>←</Text>
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Buat Group Order</Text>
+          <Text style={styles.headerTitle}>Ajakin Squad</Text>
           <View style={{ width: 36 }} />
         </View>
 
@@ -632,15 +570,9 @@ export default function GroupDetail({
               </Text>
               <Text style={styles.infoSub}>Dibuat oleh {groupData.host_name}</Text>
             </View>
-            {groupData.status === "completed" ? (
-              <View style={styles.completedBadge}>
-                <Text style={styles.completedText}>✅ Selesai</Text>
-              </View>
-            ) : (
-              <View style={styles.timerBadge}>
-                <Text style={styles.timerText}>⏱ {formatDuration(minsLeft)}</Text>
-              </View>
-            )}
+            <View style={styles.timerBadge}>
+              <Text style={styles.timerText}>⏱ {formatDuration(minsLeft)}</Text>
+            </View>
           </View>
           <View style={styles.discountHighlight}>
             <Text style={styles.discountHighlightText}>
@@ -654,6 +586,15 @@ export default function GroupDetail({
           </View>
         </View>
 
+        {groupData.status === "cancelled" && (
+          <View style={styles.cancelledBanner}>
+            <Text style={styles.cancelledBannerText}>⛔ Group Order Ini Telah Dibatalkan</Text>
+            <Text style={styles.cancelledBannerSub}>
+              Refund telah dikirim ke GameKoin masing-masing member yang sudah bayar
+            </Text>
+          </View>
+        )}
+
         <View style={styles.codeCard}>
           <Text style={styles.codeLabel}>Kode Group — Bagikan ke Teman</Text>
           <View style={styles.codeRow}>
@@ -663,7 +604,7 @@ export default function GroupDetail({
             </TouchableOpacity>
           </View>
           <TouchableOpacity style={styles.shareBtn} onPress={shareGroup}>
-            <Text style={styles.shareBtnText}>📤 Share ke Teman</Text>
+            <Text style={styles.shareBtnText}>📤 Sebar ke squad</Text>
           </TouchableOpacity>
         </View>
 
@@ -683,11 +624,11 @@ export default function GroupDetail({
             <View key={i} style={styles.memberCard}>
               <View style={styles.memberHeader}>
                 <View style={styles.memberLeft}>
-                  <View style={styles.memberAvatar}>
-                    <Text style={{ fontSize: 16 }}>
-                      {m.user_name?.charAt(0).toUpperCase() || "?"}
-                    </Text>
-                  </View>
+                  <UserAvatar
+                    avatarUrl={null}
+                    name={m.user_name}
+                    size={36}
+                  />
                   <View>
                     <Text style={styles.memberName}>
                       {m.user_name}{m.is_host ? " 👑" : ""}
@@ -695,12 +636,32 @@ export default function GroupDetail({
                     </Text>
                   </View>
                 </View>
-                <View style={[styles.statusBadge,
-                  m.payment_status === "paid" ? styles.statusPaid : styles.statusPending]}>
-                  <Text style={[styles.statusText,
-                    m.payment_status === "paid" ? styles.statusPaidText : styles.statusPendingText]}>
-                    {m.payment_status === "paid" ? "✓ Lunas" : "Menunggu"}
-                  </Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  {m.payment_status === "pending" && isHost && m.user_id !== currentUser?.id && (
+                    <TouchableOpacity
+                      style={styles.tagihBtn}
+                      onPress={() => {
+                        const minsWaiting = Math.floor(
+                          (Date.now() - new Date(m.joined_at || groupData.created_at).getTime()) / 60000
+                        );
+                        tagihHalus(m.user_name, groupData.code, minsWaiting);
+                      }}
+                    >
+                      <Text style={styles.tagihText}>💬 Tagih halus</Text>
+                    </TouchableOpacity>
+                  )}
+                  <View style={[styles.statusBadge,
+                    m.payment_status === "paid" ? styles.statusPaid :
+                    m.payment_status === "refunded" ? styles.statusRefunded :
+                    styles.statusPending]}>
+                    <Text style={[styles.statusText,
+                      m.payment_status === "paid" ? styles.statusPaidText :
+                      m.payment_status === "refunded" ? styles.statusRefundedText :
+                      styles.statusPendingText]}>
+                      {m.payment_status === "paid" ? "✓ Lunas" :
+                       m.payment_status === "refunded" ? "↩ Refund" : "Tunggu"}
+                    </Text>
+                  </View>
                 </View>
               </View>
 
@@ -752,7 +713,7 @@ export default function GroupDetail({
                   <Text style={styles.memberBreakdownPkg}>
                     {mb.package_name}
                     {(mb.quantity || 1) > 1 ? ` × ${mb.quantity}` : ""}
-                    {" — "}{formatRupiah(mb.unit_price || mb.package_price)}/pkt
+                    {" — "}{formatRupiah(mb.unitPriceResolved)}/pkt
                   </Text>
                 </View>
                 <View style={{ alignItems: "flex-end" }}>
@@ -907,11 +868,36 @@ export default function GroupDetail({
 
       {/* Footer */}
       <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
-        {myMembership?.payment_status === "paid" ? (
-          <View style={[styles.payBtn, { backgroundColor: "#e6f9ee" }]}>
-            <Text style={[styles.payBtnText, { color: "#22c55e" }]}>✓ Kamu Sudah Bayar</Text>
+        {groupData.status === "cancelled" ? (
+          // Group dibatalkan — tidak ada aksi
+          <View style={[styles.payBtn, { backgroundColor: "#f5f5f5" }]}>
+            <Text style={[styles.payBtnText, { color: "#999" }]}>⛔ Group Ini Dibatalkan</Text>
+          </View>
+        ) : myMembership?.payment_status === "refunded" ? (
+          // Member sudah di-refund
+          <View style={[styles.payBtn, { backgroundColor: "#f5f5f5" }]}>
+            <Text style={[styles.payBtnText, { color: "#888" }]}>↩ Refund Dikirim ke GameKoin</Text>
+          </View>
+        ) : myMembership?.payment_status === "paid" ? (
+          // Sudah bayar — tampilkan status + tombol cancel untuk host
+          <View style={{ gap: 8 }}>
+            <View style={[styles.payBtn, { backgroundColor: "#e6f9ee" }]}>
+              <Text style={[styles.payBtnText, { color: "#22c55e" }]}>✓ Kamu Sudah Bayar</Text>
+            </View>
+            {isHost && (
+              <TouchableOpacity
+                style={styles.cancelGroupBtn}
+                onPress={handleCancelGroup}
+                disabled={cancelling}
+              >
+                <Text style={styles.cancelGroupBtnText}>
+                  {cancelling ? "Membatalkan..." : "⛔ Batalkan Group Order"}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : myMembership ? (
+          // Sudah join tapi belum bayar
           <TouchableOpacity
             style={[styles.payBtn, submitting && styles.payBtnDisabled]}
             onPress={() => goToPayMember(myMembership)} disabled={submitting}>
@@ -925,7 +911,13 @@ export default function GroupDetail({
                 : "Bayar Sekarang"}
             </Text>
           </TouchableOpacity>
+        ) : groupData.current_members >= groupData.target_members ? (
+          // Group sudah penuh
+          <View style={[styles.payBtn, { backgroundColor: "#f5f5f5" }]}>
+            <Text style={[styles.payBtnText, { color: "#999" }]}>👥 Group Sudah Penuh</Text>
+          </View>
         ) : !showJoinForm ? (
+          // Belum join, masih ada slot
           <TouchableOpacity style={styles.payBtn} onPress={() => setShowJoinForm(true)}>
             <Text style={styles.payBtnText}>🙋 Ikut Group & Pilih Paketku</Text>
           </TouchableOpacity>
@@ -956,8 +948,6 @@ const styles = StyleSheet.create({
   infoTitle: { fontSize: 16, fontWeight: "800", color: "#1a1a1a" },
   infoSub: { fontSize: 12, color: "#888", marginTop: 2 },
   timerBadge: { backgroundColor: "#FFFBEA", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
-  completedBadge: { backgroundColor: "#dcfce7", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 },
-  completedText: { fontSize: 12, fontWeight: "800", color: "#16a34a" },
   timerText: { fontSize: 12, fontWeight: "700", color: PRIMARY },
   discountHighlight: { backgroundColor: "#e6f9ee", borderRadius: 10, padding: 12 },
   discountHighlightText: { fontSize: 16, fontWeight: "700", color: "#22c55e", textAlign: "center" },
@@ -1120,4 +1110,34 @@ const styles = StyleSheet.create({
   },
   payBtnDisabled: { backgroundColor: "#FFE4AD" },
   payBtnText: { fontSize: 16, fontWeight: "800", color: "#000" },
+
+  cancelGroupBtn: {
+    borderWidth: 1.5, borderColor: "#ef4444", borderRadius: 14,
+    height: 44, alignItems: "center", justifyContent: "center",
+  },
+  cancelGroupBtnText: { fontSize: 14, fontWeight: "700", color: "#ef4444" },
+
+  cancelledBanner: {
+    backgroundColor: "#fef2f2", borderRadius: 12, padding: 14,
+    marginBottom: 12, borderWidth: 1, borderColor: "#fecaca", alignItems: "center",
+  },
+  cancelledBannerText: { fontSize: 14, fontWeight: "800", color: "#dc2626" },
+  cancelledBannerSub: { fontSize: 12, color: "#ef4444", marginTop: 4, textAlign: "center" },
+
+  statusRefunded: { backgroundColor: "#f5f5f5" },
+  statusRefundedText: { color: "#888" },
+
+  tagihBtn: {
+    backgroundColor: "#FFF3E0",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: "#FFB74D",
+  },
+  tagihText: {
+    fontSize: 11,
+    color: "#E65100",
+    fontWeight: "600",
+  },
 });

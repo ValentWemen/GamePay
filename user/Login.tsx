@@ -74,7 +74,7 @@ export default function Login({
           </View>
           <View>
             <Text style={styles.logoText}>GamePay</Text>
-            <Text style={styles.logoSub}>Top up game favoritmu</Text>
+            <Text style={styles.logoSub}>Top-up patungan, gak ada drama.</Text>
           </View>
         </View>
       </View>

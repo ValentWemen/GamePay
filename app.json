@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "GamePay",
-    "slug": "gamepay",
+    "slug": "GamePay",
     "version": "1.0.0",
     "scheme": "gamepay",
     "orientation": "portrait",
@@ -16,9 +16,6 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.gamepay.app",
-      "associatedDomains": [
-        "applinks:gamepay.app"
-      ],
       "infoPlist": {
         "NSCameraUsageDescription": "GamePay butuh akses kamera untuk scan QR code group order dan QRIS pembayaran.",
         "NSPhotoLibraryUsageDescription": "GamePay butuh akses galeri untuk mengubah foto profil kamu.",
@@ -39,32 +36,9 @@
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
-        "android.permission.CAMERA",
-        "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.RECEIVE_BOOT_COMPLETED",
-        "android.permission.VIBRATE",
-        "android.permission.RECORD_AUDIO"
-      ],
-      "intentFilters": [
-        {
-          "action": "VIEW",
-          "autoVerify": true,
-          "data": [
-            {
-              "scheme": "https",
-              "host": "gamepay.app",
-              "pathPrefix": "/join"
-            },
-            {
-              "scheme": "gamepay"
-            }
-          ],
-          "category": [
-            "BROWSABLE",
-            "DEFAULT"
-          ]
-        }
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
       ]
     },
     "web": {
@@ -76,21 +50,7 @@
         {
           "photosPermission": "GamePay butuh akses galeri untuk mengubah foto profil kamu."
         }
-      ],
-      [
-        "expo-notifications",
-        {
-          "icon": "./assets/icon.png",
-          "color": "#FFA800",
-          "defaultChannel": "default"
-        }
       ]
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "b3ad01b0-6dbf-4f47-9cae-192a6512b158"
-      }
-    },
-    "owner": "valentwemens-organization"
+    ]
   }
 }

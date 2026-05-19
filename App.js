@@ -1,9 +1,8 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as Linking from 'expo-linking';
-import { requestNotificationPermission } from './utils/notifications';
 
 // Auth screens
 import Splash from './user/Splash';
@@ -24,6 +23,7 @@ import Payment from './main/Payment';
 import Processing from './main/Processing';
 import PaymentSuccess from './main/PaymentSuccess';
 import News from './main/News';
+import TransactionDetail from './main/TransactionDetail';
 
 // Settings screens
 import HelpCenter from './user/HelpCenter';
@@ -49,11 +49,6 @@ function AuthFlow() {
 }
 
 export default function App() {
-  // Request permission notifikasi saat app pertama kali dibuka
-  useEffect(() => {
-    requestNotificationPermission();
-  }, []);
-
   // Deep linking config - URL bisa buka app langsung
   // Contoh: gamepay://join/GP-ABC123 atau https://gamepay.app/join/GP-ABC123
   const linking = {
@@ -106,6 +101,7 @@ export default function App() {
           <RootStack.Screen name="Processing" component={Processing} options={{ animation: 'fade' }} />
           <RootStack.Screen name="PaymentSuccess" component={PaymentSuccess} options={{ animation: 'fade' }} />
           <RootStack.Screen name="News" component={News} options={{ animation: 'slide_from_right' }} />
+          <RootStack.Screen name="TransactionDetail" component={TransactionDetail} options={{ animation: 'slide_from_right' }} />
 
           {/* Account sub-screens */}
           <RootStack.Screen name="HelpCenter" component={HelpCenter} options={{ animation: 'slide_from_right' }} />

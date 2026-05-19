@@ -56,10 +56,10 @@ export default function PaymentSuccess({
           <Text style={styles.checkmark}>✓</Text>
         </View>
 
-        <Text style={styles.title}>Pembayaran Berhasil!</Text>
+        <Text style={styles.title}>Beres! Diamond udah masuk. 🎉</Text>
         <Text style={styles.sub}>
-          Top up {game} sedang diproses dan akan masuk ke akun kamu{"\n"}
-          dalam beberapa menit.
+          Top up {game} lagi diproses.{"\n"}
+          Biasanya masuk dalam beberapa menit.
         </Text>
 
         <View style={styles.card}>

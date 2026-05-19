@@ -31,6 +31,17 @@ const EMOJI_MAP: Record<string, string> = {
   "Genshin Impact": "✨",
 };
 
+// ✅ FIX: Tambah id & avatar ke DUMMY_SQUAD
+const DUMMY_SQUAD = [
+  { id: "1", name: "Adi", avatar: "A", count: 5 },
+  { id: "2", name: "Budi", avatar: "B", count: 4 },
+  { id: "3", name: "Caca", avatar: "C", count: 3 },
+  { id: "4", name: "Dinda", avatar: "D", count: 2 },
+];
+
+// ✅ FIX: Tambah id & avatar ke type
+type SquadMember = { id: string; name: string; avatar: string; count: number };
+
 type GroupRow = {
   id: string;
   code: string;
@@ -52,6 +63,53 @@ export default function Group({ navigation }: { navigation: any }) {
   const [refreshing, setRefreshing] = useState(false);
   const [joinModalVisible, setJoinModalVisible] = useState(false);
   const [joinCode, setJoinCode] = useState("");
+  const [squadMembers, setSquadMembers] = useState<SquadMember[]>(DUMMY_SQUAD);
+
+  const loadSquad = async () => {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.user) return;
+
+      const { data: myGroups } = await supabase
+        .from("group_members")
+        .select("group_id")
+        .eq("user_id", session.user.id);
+
+      if (!myGroups || myGroups.length === 0) return;
+
+      const groupIds = myGroups.map((g) => g.group_id);
+
+      const { data: coMembers } = await supabase
+        .from("group_members")
+        .select("user_name")
+        .in("group_id", groupIds)
+        .neq("user_id", session.user.id);
+
+      if (!coMembers || coMembers.length === 0) return;
+
+      const freq: Record<string, number> = {};
+      coMembers.forEach((m) => {
+        freq[m.user_name] = (freq[m.user_name] || 0) + 1;
+      });
+
+      // ✅ FIX: Tambah id & avatar saat mapping dari data real
+      const sorted = Object.entries(freq)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([name, count], index) => ({
+          id: String(index + 1),
+          name,
+          avatar: name.charAt(0).toUpperCase(),
+          count,
+        }));
+
+      if (sorted.length > 0) setSquadMembers(sorted);
+    } catch (e) {
+      console.error("loadSquad error:", e);
+    }
+  };
 
   const fetchGroups = async () => {
     try {
@@ -64,7 +122,7 @@ export default function Group({ navigation }: { navigation: any }) {
         .limit(20);
 
       if (error) {
-        console.warn("Fetch groups (table mungkin belum ada):", error.message);
+        console.warn("Fetch groups:", error.message);
         setGroups([]);
       } else {
         setGroups(data || []);
@@ -80,31 +138,23 @@ export default function Group({ navigation }: { navigation: any }) {
 
   useFocusEffect(
     useCallback(() => {
+      loadSquad();
       fetchGroups();
     }, []),
   );
 
   const onRefresh = () => {
     setRefreshing(true);
+    loadSquad();
     fetchGroups();
   };
 
   const handleJoinByCode = async () => {
-    // Strip "GP-" kalau user paste full code, lalu re-add
-    let codeInput = joinCode.trim().toUpperCase().replace(/^GP-?/, "");
-    if (!codeInput) {
+    const code = joinCode.trim().toUpperCase();
+    if (!code) {
       Alert.alert("Kode Kosong", "Masukkan kode group terlebih dahulu");
       return;
     }
-    if (codeInput.length !== 6) {
-      Alert.alert(
-        "Kode Tidak Valid",
-        "Kode group harus 6 karakter (contoh: ABC123)",
-      );
-      return;
-    }
-    const code = `GP-${codeInput}`;
-
     try {
       const { data, error } = await supabase
         .from("groups")
@@ -131,7 +181,7 @@ export default function Group({ navigation }: { navigation: any }) {
 
   const handleCreate = () => {
     Alert.alert(
-      "Buat Group Order",
+      "Bikin Patungan",
       "Pilih game dulu di halaman Home, lalu aktifkan 'Patungan dengan Teman' saat pilih paket.",
       [
         { text: "Batal", style: "cancel" },
@@ -175,13 +225,12 @@ export default function Group({ navigation }: { navigation: any }) {
             <Text style={styles.actionTitle}>Buat Group</Text>
             <Text style={styles.actionSub}>Mulai patungan baru</Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={styles.actionCard}
             onPress={() => setJoinModalVisible(true)}
           >
             <Text style={styles.actionEmoji}>🔑</Text>
-            <Text style={styles.actionTitle}>Pakai Kode</Text>
+            <Text style={styles.actionTitle}>Punya kode dari temen?</Text>
             <Text style={styles.actionSub}>Join dari teman</Text>
           </TouchableOpacity>
         </View>
@@ -210,10 +259,34 @@ export default function Group({ navigation }: { navigation: any }) {
           </View>
         </View>
 
-        <Text style={styles.sectionLabel}>
-          Group Terbuka ({groups.length})
-        </Text>
+        <Text style={styles.sectionLabel}>Squad mabar kamu</Text>
+        <Text style={styles.sectionSub}>Sering top-up bareng mereka</Text>
 
+        {/* ✅ FIX: Ganti FREQUENT_SQUAD → squadMembers */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ marginBottom: 20 }}
+        >
+          {squadMembers.map((s) => (
+            <TouchableOpacity
+              key={s.id}
+              style={styles.squadCard}
+              onPress={handleCreate}
+            >
+              <View style={styles.squadAvatar}>
+                <Text style={styles.squadAvatarText}>{s.avatar}</Text>
+              </View>
+              <Text style={styles.squadName}>{s.name}</Text>
+              <Text style={styles.squadCount}>{s.count}× bareng</Text>
+              <View style={styles.squadAjakBtn}>
+                <Text style={styles.squadAjakText}>Ajak lagi</Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        <Text style={styles.sectionLabel}>Group Terbuka ({groups.length})</Text>
         {loading ? (
           <ActivityIndicator color={PRIMARY} style={{ marginTop: 30 }} />
         ) : groups.length === 0 ? (
@@ -234,7 +307,6 @@ export default function Group({ navigation }: { navigation: any }) {
               g.package_price,
               g.target_members,
             );
-
             return (
               <TouchableOpacity
                 key={g.id}
@@ -256,13 +328,11 @@ export default function Group({ navigation }: { navigation: any }) {
                     <Text style={styles.discountText}>-{discount}%</Text>
                   </View>
                 </View>
-
                 <View style={styles.progressBarBg}>
                   <View
                     style={[styles.progressBarFill, { width: `${progress}%` }]}
                   />
                 </View>
-
                 <View style={styles.groupMetaRow}>
                   <Text style={styles.groupMeta}>
                     👤 {g.current_members}/{g.target_members} orang
@@ -297,26 +367,15 @@ export default function Group({ navigation }: { navigation: any }) {
             <Text style={styles.modalSub}>
               Minta kode dari teman yang sudah buat group
             </Text>
-            <View style={styles.inputRow}>
-              <View style={styles.prefixBox}>
-                <Text style={styles.prefixText}>GP-</Text>
-              </View>
-              <TextInput
-                style={styles.modalInput}
-                placeholder="XXXXXX"
-                placeholderTextColor="#bbb"
-                value={joinCode}
-                onChangeText={(t) => {
-                  // Strip "GP-" otomatis kalau user paste full code
-                  let cleaned = t.toUpperCase().replace(/^GP-?/, "");
-                  // Hanya alphanumeric, max 6 char
-                  cleaned = cleaned.replace(/[^A-Z0-9]/g, "").slice(0, 6);
-                  setJoinCode(cleaned);
-                }}
-                autoCapitalize="characters"
-                maxLength={6}
-              />
-            </View>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="GP-XXXXXX"
+              placeholderTextColor="#bbb"
+              value={joinCode}
+              onChangeText={(t) => setJoinCode(t.toUpperCase())}
+              autoCapitalize="characters"
+              maxLength={10}
+            />
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={styles.modalCancel}
@@ -355,49 +414,111 @@ const styles = StyleSheet.create({
   },
   headerLeft: { flexDirection: "row", alignItems: "center", gap: 12 },
   headerIcon: {
-    width: 42, height: 42, borderRadius: 21,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: "rgba(255,255,255,0.3)",
-    alignItems: "center", justifyContent: "center",
+    alignItems: "center",
+    justifyContent: "center",
   },
   headerTitle: { fontSize: 18, fontWeight: "800", color: "#fff" },
   headerSub: { fontSize: 11, color: "rgba(255,255,255,0.85)" },
-
   actionRow: { flexDirection: "row", gap: 10, marginBottom: 16 },
   actionCard: {
-    flex: 1, backgroundColor: "#fff", borderRadius: 14, padding: 16,
+    flex: 1,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 16,
     alignItems: "center",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
   actionEmoji: { fontSize: 28, marginBottom: 6 },
   actionTitle: { fontSize: 13, fontWeight: "700", color: "#1a1a1a" },
   actionSub: { fontSize: 11, color: "#888", marginTop: 2, textAlign: "center" },
-
   promoBanner: {
     backgroundColor: "#1a1a2e",
-    borderRadius: 14, padding: 16, marginBottom: 20,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 20,
   },
-  promoBannerTitle: { fontSize: 14, fontWeight: "800", color: "#fff", marginBottom: 10 },
+  promoBannerTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#fff",
+    marginBottom: 10,
+  },
   promoBenefit: {
-    flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 6,
   },
   promoBenefitEmoji: { fontSize: 16 },
   promoBenefitText: { fontSize: 13, color: "#fff" },
-
-  sectionLabel: { fontSize: 14, fontWeight: "700", color: "#333", marginBottom: 10 },
-
+  sectionLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#333",
+    marginBottom: 4,
+  },
+  sectionSub: { fontSize: 12, color: "#aaa", marginBottom: 12 },
+  squadCard: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 14,
+    alignItems: "center",
+    marginRight: 10,
+    width: 90,
+    borderWidth: 1,
+    borderColor: "#f0f0f0",
+  },
+  squadAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: PRIMARY,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 6,
+  },
+  squadAvatarText: { fontSize: 18, fontWeight: "800", color: "#fff" },
+  squadName: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#1a1a1a",
+    marginBottom: 2,
+  },
+  squadCount: { fontSize: 10, color: "#aaa", marginBottom: 8 },
+  squadAjakBtn: {
+    backgroundColor: PRIMARY,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  squadAjakText: { fontSize: 10, fontWeight: "700", color: "#000" },
   emptyBox: {
-    backgroundColor: "#fff", borderRadius: 14, padding: 30,
-    alignItems: "center", marginTop: 10,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 30,
+    alignItems: "center",
+    marginTop: 10,
   },
   emptyTitle: { fontSize: 14, fontWeight: "700", color: "#666", marginTop: 12 },
   emptySub: { fontSize: 12, color: "#aaa", marginTop: 4, textAlign: "center" },
-
   groupCard: {
-    backgroundColor: "#fff", borderRadius: 14, padding: 14, marginBottom: 10,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
   },
   groupHeader: {
-    flexDirection: "row", justifyContent: "space-between", marginBottom: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 12,
   },
   groupLeft: { flexDirection: "row", alignItems: "center", gap: 12, flex: 1 },
   groupName: { fontSize: 14, fontWeight: "700", color: "#1a1a1a" },
@@ -405,69 +526,79 @@ const styles = StyleSheet.create({
   groupHost: { fontSize: 11, color: "#aaa", marginTop: 2 },
   discountBadge: {
     backgroundColor: "#e6f9ee",
-    paddingHorizontal: 10, paddingVertical: 4,
-    borderRadius: 10, alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    alignSelf: "flex-start",
   },
   discountText: { fontSize: 13, fontWeight: "800", color: "#22c55e" },
   progressBarBg: {
-    height: 6, backgroundColor: "#f0f0f0", borderRadius: 3,
-    overflow: "hidden", marginBottom: 10,
+    height: 6,
+    backgroundColor: "#f0f0f0",
+    borderRadius: 3,
+    overflow: "hidden",
+    marginBottom: 10,
   },
-  progressBarFill: { height: "100%", backgroundColor: PRIMARY, borderRadius: 3 },
+  progressBarFill: {
+    height: "100%",
+    backgroundColor: PRIMARY,
+    borderRadius: 3,
+  },
   groupMetaRow: { flexDirection: "row", justifyContent: "space-between" },
   groupMeta: { fontSize: 12, color: "#888" },
-
   modalOverlay: {
-    flex: 1, backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "center", alignItems: "center", padding: 24,
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
   },
   modalCard: {
-    backgroundColor: "#fff", borderRadius: 20, padding: 24,
-    width: "100%", maxWidth: 360,
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 24,
+    width: "100%",
+    maxWidth: 360,
   },
   modalTitle: {
-    fontSize: 18, fontWeight: "800", color: "#1a1a1a", textAlign: "center",
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#1a1a1a",
+    textAlign: "center",
   },
   modalSub: {
-    fontSize: 13, color: "#888", textAlign: "center",
-    marginTop: 6, marginBottom: 16,
-  },
-  inputRow: {
-    flexDirection: "row",
-    alignItems: "center",
+    fontSize: 13,
+    color: "#888",
+    textAlign: "center",
+    marginTop: 6,
     marginBottom: 16,
-    gap: 8,
-  },
-  prefixBox: {
-    backgroundColor: "#FFFBEA",
-    borderWidth: 1.5,
-    borderColor: "#FFE4AD",
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    justifyContent: "center",
-  },
-  prefixText: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: "#FFA800",
-    letterSpacing: 1,
   },
   modalInput: {
-    flex: 1,
-    backgroundColor: "#F5F5F5", borderRadius: 12, padding: 14,
-    fontSize: 16, textAlign: "center", fontWeight: "700",
-    letterSpacing: 3, color: "#1a1a1a",
+    backgroundColor: "#F5F5F5",
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 16,
+    textAlign: "center",
+    fontWeight: "700",
+    letterSpacing: 2,
+    color: "#1a1a1a",
+    marginBottom: 16,
   },
   modalActions: { flexDirection: "row", gap: 10 },
   modalCancel: {
-    flex: 1, backgroundColor: "#F5F5F5", borderRadius: 12,
-    padding: 14, alignItems: "center",
+    flex: 1,
+    backgroundColor: "#F5F5F5",
+    borderRadius: 12,
+    padding: 14,
+    alignItems: "center",
   },
   modalCancelText: { fontSize: 14, fontWeight: "700", color: "#666" },
   modalJoin: {
-    flex: 1, backgroundColor: PRIMARY, borderRadius: 12,
-    padding: 14, alignItems: "center",
+    flex: 1,
+    backgroundColor: PRIMARY,
+    borderRadius: 12,
+    padding: 14,
+    alignItems: "center",
   },
   modalJoinText: { fontSize: 14, fontWeight: "800", color: "#000" },
 });
